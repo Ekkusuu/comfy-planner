@@ -1,0 +1,31 @@
+# The few word lists the planner reads. The planner reads this file on every call, so you can edit it without restarting the app.
+#
+# There are no tag lists here. For a vague word such as "cozy", "intricate" or "rainy", the planner searches the tag library by meaning
+# (and reranks the best matches when the reranking model is installed) and offers the real tags that come out. Nothing here is a rule about
+# what may be made.
+
+# The least rating a request's words ask for. The scene plan may go higher when the request supports it; code never lets it go lower.
+# The levels follow the planner's own definitions: sensitive is suggestive or revealing but clothed, nsfw is adult content with nudity or
+# sexual content, explicit is plainly explicit sex.
+[ratings]
+sensitive = ["teasing", "suggestive", "flirty", "playful"]
+nsfw = ["nsfw", "lewd", "erotic", "erotica", "sexy", "seductive", "sexual", "spicy"]
+explicit = ["explicit", "sex", "hardcore", "pornographic"]
+# Words that raise a rating word by one level when they stand right before it ("very nsfw", "extremely lewd" -> explicit), unless the
+# request sets a limit ("nothing explicit"). A word that is both an intensifier and a rating word ("spicy") raises the level by itself.
+intensifiers = ["very", "extremely", "super", "really", "ultra", "highly", "spicy"]
+
+# Words about looks that the tag search leaves out of a request's words when the picture is rated nsfw or explicit, so that these
+# appearance words never bring tags into adult pictures.
+[skipped_at_high_rating]
+words = ["cute", "adorable", "sweet", "kawaii", "pretty"]
+
+# ---------- the look: what a style LoRA sets itself ----------
+
+# A LoRA card with "The LoRA sets the look" on (style LoRAs by default) paints its own colours, light and rendering, and light-and-colour
+# tags written next to it override them (measured: the same picture with and without them). So on a job that uses such a LoRA the
+# planner offers no colour-lighting idea and removes light tags from the prompts, unless the request itself names them. A tag counts as a
+# light tag when its last word ends like one of the `endings` (`soft lighting`, `sidelighting`), or it is a colour scheme from your colour
+# lists (the lists whose role fills the lighting slot: `navy blue and magenta` is a colour scheme, `blue hair` is not).
+[look]
+endings = ["lighting"]

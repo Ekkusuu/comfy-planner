@@ -1,0 +1,64 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["purpose", "best_for", "family", "prompt_style", "settings", "warnings", "examples", "use_full_notes"],
+  "properties": {
+    "purpose": {"type": "string", "minLength": 1, "description": "One or two plain sentences: what this workflow makes and how."},
+    "best_for": {"type": "string", "minLength": 1, "description": "A short phrase: the kinds of requests it suits."},
+    "family": {"type": "string", "enum": ["Anima", "Krea-2", "Qwen-Image", "SDXL", "Pony", "Illustrious", "SD1.5", "Flux", "other"]},
+    "prompt_style": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "quality_prefix", "rules"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["tags", "sentences", "mixed"]},
+        "quality_prefix": {"type": "string", "description": "Quality tags that start every prompt; empty if none."},
+        "rules": {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cfg", "steps", "samplers", "schedulers", "sizes", "pixel_budget"],
+      "properties": {
+        "cfg": {"$ref": "#/$defs/range"},
+        "steps": {"$ref": "#/$defs/range"},
+        "samplers": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "schedulers": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "sizes": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["w", "h", "label"],
+            "properties": {"w": {"type": "integer"}, "h": {"type": "integer"}, "label": {"type": "string"}}
+          }
+        },
+        "pixel_budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {"min": {"type": "integer"}, "max": {"type": "integer"}}
+        },
+        "hires": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["steps", "denoise"],
+          "properties": {"steps": {"$ref": "#/$defs/range"}, "denoise": {"$ref": "#/$defs/range"}}
+        }
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+    "examples": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 3},
+    "use_full_notes": {"type": "boolean"}
+  },
+  "$defs": {
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rec", "min", "max"],
+      "properties": {"rec": {"type": "number"}, "min": {"type": "number"}, "max": {"type": "number"}}
+    }
+  }
+}

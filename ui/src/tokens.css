@@ -1,0 +1,47 @@
+/* Design tokens. Dark only, mint accent. See DESIGN.md. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0a0a0b;
+  --surface: #111113;
+  --raised: #1a1a1d;
+  --float: #232327;
+  --line: rgba(255, 255, 255, 0.07);
+  --line2: rgba(255, 255, 255, 0.12);
+
+  --text: #ededef;
+  --text-soft: #c9c9cf;
+  --muted: #8e8e96;
+  --faint: #7c7c86;
+
+  --mint: #6ee7b7;
+  --mint-hover: #86eec4;
+  --mint-ink: #062a1e;
+  --mint-dim: rgba(110, 231, 183, 0.1);
+  --mint-line: rgba(110, 231, 183, 0.38);
+  --amber: #f5b451;
+  --amber-dim: rgba(245, 180, 81, 0.1);
+  --amber-line: rgba(245, 180, 81, 0.32);
+  --red: #ff8a80;
+  --red-dim: rgba(255, 138, 128, 0.1);
+  --red-line: rgba(255, 138, 128, 0.32);
+
+  --font: 'Geist Variable', Geist, system-ui, sans-serif;
+  --mono: 'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace;
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 9px;
+  --r-xl: 12px;
+  --r-2xl: 14px;
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-overlay: 0 24px 64px rgba(0, 0, 0, 0.6);
+
+  --rail: 52px;
+}
+
+@media (min-width: 1000px) {
+  :root { --rail: 200px; }
+}

@@ -1,0 +1,78 @@
+# Comfy Planner settings. Relative paths are relative to the project folder.
+# This is the template. The app reads config/app.toml (your own copy, not tracked by git); if that file is missing the
+# built-in defaults are used, and saving from the Settings page creates it. To start by hand: copy this file to app.toml.
+
+[comfy]
+url = "http://127.0.0.1:8188"
+install_dir = ""               # folder of your ComfyUI install (the one holding models/ and user/); set it in Settings
+cli = "comfy"                  # command used by "Start ComfyUI"
+
+[app]
+host = "127.0.0.1"
+port = 8765
+data_dir = "data"
+
+[jobs]
+max_images_per_job = 16
+# max_images_per_request = 200   # most images one planned request may add up to (a batch); this is the default
+hires_default = true           # hires pass on unless a job says otherwise
+max_loras = 3
+
+# Optional tags always merged into every negative prompt (after the LLM and after your edits).
+# Empty by default: the app doesn't filter content. Add tags here if you want a standing negative.
+safety_negative = []
+
+# Tags removed from a workflow's own default negative prompt when the app uses it (your workflow files are
+# not changed). Tags you type into a job are never removed.
+strip_from_default_negative = []
+
+# The local LLM: llama.cpp's llama-server, started for planning and card building, stopped for generation.
+[llm]
+binary = "tools/llama.cpp/b11960/llama-server.exe"
+model = "gemma"                # which entry of [llm.models] to use ("gemma" or "qwen")
+host = "127.0.0.1"
+port = 8090
+ctx_size = 8192
+gpu_layers = 99                # 99 = everything on the GPU
+enable_thinking = false        # sent as chat_template_kwargs; thinking off is faster with constrained JSON
+temperature = 0.2
+max_tokens = 3000
+start_timeout = 180            # seconds to wait for the model to load
+stop_timeout = 15              # seconds to wait after asking it to stop, then it is killed
+extra_args = []                # anything else to pass to llama-server
+
+[llm.models]
+# Paths to GGUF model files (relative to the project folder or absolute). Replace these placeholders with your own files.
+gemma = "models/llm/gemma-12b-instruct-q4_0.gguf"
+qwen = "models/llm/qwen-9b-instruct-q6_k.gguf"
+
+[cards]
+# false: the planner uses approved cards only. true: it also uses drafts the LLM wrote that you haven't checked.
+allow_draft_cards = true
+
+# Search by meaning: a small embedding model (llama.cpp, on the CPU, never the GPU) lets the planner find wildcard
+# lists, LoRA cards and liked prompts by what they mean, not only by shared words. Off, or with the model file missing, the
+# planner falls back to keyword search. The model's own text prefixes come from its model card.
+[embeddings]
+enabled = true
+model = "models/embeddings/embedding-model/embedding-model-Q8_0.gguf"
+port = 8099
+query_prefix = "task: search result | query: "
+doc_prefix = "title: none | text: "
+threads = 0                    # CPU threads for the embedding server; 0 = llama.cpp decides
+idle_stop = 600                # seconds without use before the embedding server is stopped (it restarts when needed)
+floor = 0.25                   # least meaning score for a wildcard list to be offered
+margin = 0.10                  # ... and at most this far below the best list's score
+lora_floor = 0.35              # least meaning score for a LoRA card to count as pointed at by the brief
+
+# Reranking: a second small model, also run by llama.cpp on the CPU, reads a request together with each of the best matches of
+# the search by meaning and puts them in better order. The model file is not shipped; without it (or with this off, or if it fails its start-up
+# check) the planner uses the search by meaning alone. It needs the embeddings above to be on.
+[reranker]
+enabled = false           # off by default; set to true to use it
+model = "models/reranker/Qwen3-Reranker-0.6B-Q4_K_M.gguf"
+port = 8101
+pool = 24                      # how many of the best matches are reranked
+weight = 0.7                   # share of the reranker's score in the final one (the rest is the search by meaning's), both scaled 0..1 per request
+timeout = 30                   # seconds one rerank request may take
+threads = 0                    # CPU threads for the reranker server; 0 = llama.cpp decides

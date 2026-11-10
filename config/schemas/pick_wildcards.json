@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "picks"
+  ],
+  "properties": {
+    "picks": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "list_name",
+          "slot",
+          "reason"
+        ],
+        "properties": {
+          "list_name": {
+            "type": "string",
+            "description": "Filled at runtime with the names of the catalog's lists."
+          },
+          "reason": {
+            "type": "string",
+            "description": "At most 12 words: why this list suits this request.",
+            "maxLength": 100
+          },
+          "slot": {
+            "type": "string",
+            "description": "Filled at runtime: the part of the picture this list's entries are for (camera, pose, outfit, setting, lighting, expression, body, mood) or any."
+          }
+        }
+      }
+    }
+  }
+}

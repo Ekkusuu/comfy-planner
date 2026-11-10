@@ -1,0 +1,65 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "loras",
+    "reason"
+  ],
+  "properties": {
+    "loras": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lora",
+          "weight",
+          "reason"
+        ],
+        "properties": {
+          "lora": {
+            "type": "string",
+            "description": "Filled at runtime with the candidate file names."
+          },
+          "weight": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string",
+            "description": "One short sentence: why this LoRA, why this strength.",
+            "maxLength": 240
+          }
+        }
+      }
+    },
+    "reason": {
+      "type": "string",
+      "description": "One short sentence for the whole choice; if no LoRA, say why.",
+      "maxLength": 240
+    },
+    "left_out": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lora",
+          "reason"
+        ],
+        "properties": {
+          "lora": {
+            "type": "string",
+            "description": "Filled at runtime with the candidate file names."
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 160
+          }
+        }
+      },
+      "description": "Candidates you looked at and did not use, with a short reason each."
+    }
+  }
+}

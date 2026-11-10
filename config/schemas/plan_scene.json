@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "subjects",
+    "body",
+    "outfit",
+    "pose",
+    "action",
+    "expression",
+    "camera",
+    "gaze",
+    "setting",
+    "lighting",
+    "mood",
+    "detail_level",
+    "rating",
+    "must_keep",
+    "avoid"
+  ],
+  "properties": {
+    "subjects": {"type": "string", "maxLength": 120, "description": "Who is in the picture and how many, as adults."},
+    "body": {"type": "string", "maxLength": 160},
+    "outfit": {"type": "string", "maxLength": 160},
+    "pose": {"type": "string", "maxLength": 160},
+    "action": {"type": "string", "maxLength": 160},
+    "expression": {"type": "string", "maxLength": 120},
+    "camera": {"type": "string", "maxLength": 120, "description": "Where the camera is: the angle and the framing."},
+    "gaze": {"type": "string", "maxLength": 80, "description": "Where the person looks (a different thing from the camera angle)."},
+    "setting": {"type": "string", "maxLength": 160},
+    "lighting": {"type": "string", "maxLength": 120},
+    "mood": {"type": "string", "maxLength": 80},
+    "detail_level": {"type": "string", "enum": ["normal", "high", "very_high"]},
+    "rating": {"type": "string", "enum": ["general", "sensitive", "nsfw", "explicit"]},
+    "must_keep": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {"type": "string", "minLength": 1, "maxLength": 80},
+      "description": "The user's own concrete words, copied exactly."
+    },
+    "avoid": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {"type": "string", "minLength": 1, "maxLength": 40},
+      "description": "Things the user says must NOT be in the picture, as plain nouns ('glasses', 'text'). Empty when they say nothing like that."
+    }
+  }
+}

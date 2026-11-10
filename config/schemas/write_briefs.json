@@ -1,0 +1,64 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "briefs",
+    "subjects"
+  ],
+  "properties": {
+    "briefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 320,
+        "description": "One or two sentences saying what this image shows."
+      }
+    },
+    "subjects": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "girls",
+          "boys",
+          "others",
+          "people",
+          "no_humans"
+        ],
+        "description": "How many people the pictures show. girls and boys: how many of each (0 only when the request makes clear there are none, -1 when it says nothing). others: people who are neither (not animals). people: the total when the request gives a number but not who they are ('3 friends'), else -1. Resolve 'several', 'multiple', 'a group' to a number.",
+        "properties": {
+          "girls": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 30
+          },
+          "boys": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 30
+          },
+          "others": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 30
+          },
+          "people": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 30
+          },
+          "no_humans": {
+            "type": "boolean",
+            "description": "true only when no person is in the pictures (a landscape, an animal, an object)."
+          }
+        }
+      }
+    }
+  }
+}

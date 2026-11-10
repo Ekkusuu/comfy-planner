@@ -1,0 +1,81 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "reason"
+  ],
+  "properties": {
+    "prompts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1200
+      },
+      "description": "Only if the prompts change: all of them, rewritten."
+    },
+    "negative": {
+      "type": "string",
+      "description": "Only if the negative prompt changes: the whole new negative.",
+      "maxLength": 1500
+    },
+    "lora_weights": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lora",
+          "weight"
+        ],
+        "properties": {
+          "lora": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number"
+          }
+        }
+      },
+      "description": "Only for LoRAs whose strength changes."
+    },
+    "steps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "cfg": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 30
+    },
+    "sampler": {
+      "type": "string"
+    },
+    "scheduler": {
+      "type": "string"
+    },
+    "size": {
+      "type": "string"
+    },
+    "hires": {
+      "type": "boolean"
+    },
+    "seed_strategy": {
+      "type": "string",
+      "enum": [
+        "random",
+        "fixed",
+        "increment"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "description": "One short sentence: what was changed and why.",
+      "maxLength": 240
+    }
+  }
+}

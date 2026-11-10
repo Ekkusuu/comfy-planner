@@ -1,0 +1,1 @@
+This workflow does not read prompt weights. Never write weights or bracket emphasis such as `(x:1.3)`, `(x)` or `((x))`. To stress something, use wording and word order: say it early, describe it in more detail, make it the main clause. Round brackets are for nothing else, except inside a name that already has them, like `aria vale (starlight)`.

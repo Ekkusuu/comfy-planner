@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "prompts",
+    "negative_additions",
+    "reason"
+  ],
+  "properties": {
+    "prompts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "prompt",
+          "variation"
+        ],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1200
+          },
+          "variation": {
+            "type": "string",
+            "description": "At most 12 words: how this image differs from the others.",
+            "maxLength": 120
+          }
+        }
+      }
+    },
+    "negative_additions": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "string",
+        "maxLength": 60
+      },
+      "description": "Extra negative tags for this job; empty if none are needed."
+    },
+    "reason": {
+      "type": "string",
+      "description": "One short sentence about the prompt choices.",
+      "maxLength": 240
+    }
+  }
+}

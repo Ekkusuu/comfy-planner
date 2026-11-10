@@ -1,0 +1,36 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+models/
+tools/
+ui/node_modules/
+ui/dist/
+*.gguf
+*.safetensors
+.env
+scratch/
+
+# Launcher build output (launcher/build.ps1 creates it; launcher/icon.ico is kept)
+/Comfy Planner.exe
+/Microsoft.Web.WebView2.Core.dll
+/Microsoft.Web.WebView2.WinForms.dll
+/WebView2Loader.dll
+# WebView2 SDK package that launcher/build.ps1 downloads (pinned, hash-checked)
+/launcher/webview2/
+
+# Local-only files and settings: never commit
+private/
+config/app.toml
+docs/
+design/
+.ruff_cache/
+*.db
+*.sqlite3
+*.log
+.DS_Store
+.vscode/
+
+# Local instructions for coding agents
+AGENTS.md

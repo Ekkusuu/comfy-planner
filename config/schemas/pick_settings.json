@@ -1,0 +1,111 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "steps",
+    "cfg",
+    "sampler",
+    "scheduler",
+    "size",
+    "seed_strategy",
+    "hires",
+    "hires_steps",
+    "hires_denoise",
+    "reasons"
+  ],
+  "properties": {
+    "steps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "cfg": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 30
+    },
+    "sampler": {
+      "type": "string",
+      "description": "Filled at runtime with the allowed samplers."
+    },
+    "scheduler": {
+      "type": "string",
+      "description": "Filled at runtime with the allowed schedulers."
+    },
+    "size": {
+      "type": "string",
+      "description": "Filled at runtime with the allowed sizes, as WIDTHxHEIGHT."
+    },
+    "seed_strategy": {
+      "type": "string",
+      "enum": [
+        "random",
+        "fixed",
+        "increment"
+      ]
+    },
+    "hires": {
+      "type": "boolean"
+    },
+    "hires_steps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "hires_denoise": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "reasons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "why_steps",
+        "why_cfg",
+        "why_sampler",
+        "why_scheduler",
+        "why_size",
+        "why_seed_strategy",
+        "why_hires"
+      ],
+      "properties": {
+        "why_steps": {
+          "type": "string",
+          "description": "One short sentence.",
+          "maxLength": 240
+        },
+        "why_cfg": {
+          "type": "string",
+          "description": "One short sentence.",
+          "maxLength": 240
+        },
+        "why_sampler": {
+          "type": "string",
+          "description": "One short sentence.",
+          "maxLength": 240
+        },
+        "why_scheduler": {
+          "type": "string",
+          "description": "One short sentence.",
+          "maxLength": 240
+        },
+        "why_size": {
+          "type": "string",
+          "description": "One short sentence.",
+          "maxLength": 240
+        },
+        "why_seed_strategy": {
+          "type": "string",
+          "description": "One short sentence.",
+          "maxLength": 240
+        },
+        "why_hires": {
+          "type": "string",
+          "description": "One short sentence, covering the hires steps and denoise too.",
+          "maxLength": 240
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,295 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent",
+    "jobs"
+  ],
+  "properties": {
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rating",
+        "rating_limit",
+        "mentions",
+        "use_loras",
+        "skip_loras",
+        "skip_kinds",
+        "per_lora_kind",
+        "per_lora_words",
+        "images_per_lora",
+        "per_lora_tags",
+        "per_lora_limit",
+        "extra_loras",
+        "extra_kinds",
+        "vary"
+      ],
+      "description": "What the request asks for besides the pictures: content level, LoRAs wanted and not wanted, 'N images per LoRA of a kind', other LoRAs, and what must differ between images.",
+      "properties": {
+        "rating": {
+          "type": "string",
+          "enum": [
+            "general",
+            "sensitive",
+            "nsfw",
+            "explicit"
+          ],
+          "description": "The content level the user asks for: general when nothing special is said."
+        },
+        "rating_limit": {
+          "type": "boolean",
+          "description": "true only when the user sets an upper limit on the content level (nothing explicit, keep it tasteful, clothed only); false otherwise."
+        },
+        "mentions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mention",
+              "wanted"
+            ],
+            "properties": {
+              "mention": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8,
+                "description": "Filled at runtime: the numbers of the mentions."
+              },
+              "wanted": {
+                "type": "boolean",
+                "description": "true when the user wants this LoRA on the images, false when they say to leave it out or not to use it."
+              }
+            }
+          },
+          "description": "One entry for each LoRA written with @ in the request ('the chosen LoRA [n]'): does the user want it or not? Read the words around it."
+        },
+        "use_loras": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "description": "LoRAs the user wants, written WITHOUT @ (names typed in words). Never a number, a mention, true/false or a wish to add whatever fits (that is extra_loras)."
+        },
+        "skip_loras": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "description": "LoRAs the user leaves out, written WITHOUT @ as typed in words (\"except X\", \"without X\", \"skip X\", \"not X\", \"leave out X\"). Never a number or a mention."
+        },
+        "skip_kinds": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "string",
+            "enum": [
+              "character",
+              "style",
+              "concept",
+              "clothing",
+              "pose",
+              "other"
+            ]
+          },
+          "description": "Kinds of LoRA the user wants none of."
+        },
+        "per_lora_kind": {
+          "type": "string",
+          "enum": [
+            "none",
+            "character",
+            "style",
+            "concept",
+            "clothing",
+            "pose",
+            "other"
+          ],
+          "description": "none, or the kind of LoRA when the user wants a number of images for EACH (every, per) LoRA of that kind. Naming one LoRA is not a group: leave none."
+        },
+        "per_lora_words": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Only with a per_lora_kind: the words of the request that ask for images for each LoRA of that kind, copied exactly. Empty when per_lora_kind is none."
+        },
+        "images_per_lora": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Only with a per_lora_kind: how many images for each LoRA of the group (\"3 images per style lora\" is 3, \"one image for each\" is 1, \"do 2\" is 2). It is not the number of LoRAs. 1 when there is no group."
+        },
+        "per_lora_tags": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "description": "The user's own LoRA tags that narrow that group; usually empty."
+        },
+        "per_lora_limit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30,
+          "description": "Use only this many LoRAs of the group; 0 means all of them."
+        },
+        "extra_loras": {
+          "type": "string",
+          "enum": [
+            "default",
+            "none",
+            "as_fit"
+          ],
+          "description": "default: nothing said about extra LoRAs. none: the user wants no (other) LoRAs. as_fit: the user hands the planner the choice of LoRAs in any wording (add whatever fits, use any you like, the other loras as you wish)."
+        },
+        "extra_kinds": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "string",
+            "enum": [
+              "character",
+              "style",
+              "concept",
+              "clothing",
+              "pose",
+              "other"
+            ]
+          },
+          "description": "Which kinds of LoRA the planner may add; empty means any."
+        },
+        "vary": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "enum": [
+              "camera",
+              "gaze",
+              "pose",
+              "outfit",
+              "setting",
+              "lighting",
+              "expression",
+              "body",
+              "mood"
+            ]
+          },
+          "description": "What the user wants different in every image: the camera angle, where the person looks, the pose, the outfit, the setting ..."
+        }
+      }
+    },
+    "jobs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "picture_given",
+          "description",
+          "count",
+          "variety",
+          "subjects",
+          "constraints",
+          "issues",
+          "reason"
+        ],
+        "properties": {
+          "picture_given": {
+            "type": "boolean",
+            "description": "true when the request itself says what the pictures show (a subject, an act, a place). false when it only asks for pictures made in some way (a number of images, LoRAs, styles) and leaves the picture open."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What to draw, one or two plain sentences: the subject, what it does, where. No LoRA names, counts, styles-as-a-topic or words about the pictures themselves. When picture_given is false, a short placeholder.",
+            "maxLength": 400
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "description": "How many images the user asked for; 1 if no number is about images. \"five girls at a beach\" is 1 image with 5 girls."
+          },
+          "variety": {
+            "type": "string",
+            "enum": [
+              "variations",
+              "unique"
+            ],
+            "description": "variations: the same subject and scene, images differ in framing, pose and lighting. unique: every image is its own idea."
+          },
+          "constraints": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "description": "Short demands to keep: style, mood, aspect ratio, \"use the style LoRA\", \"same seed\"."
+          },
+          "issues": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "string",
+              "maxLength": 240
+            },
+            "description": "Anything about this job you could not decide. Usually empty."
+          },
+          "reason": {
+            "type": "string",
+            "description": "One short sentence: why this is its own job, or what in the request it covers.",
+            "maxLength": 240
+          },
+          "subjects": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "girls",
+              "boys",
+              "others",
+              "people",
+              "no_humans"
+            ],
+            "description": "How many people the pictures show. girls and boys: how many of each (0 only when the request makes clear there are none, -1 when it says nothing). others: people who are neither (not animals). people: the total when the request gives a number but not who they are ('3 friends'), else -1. Resolve 'several', 'multiple', 'a group' to a number.",
+            "properties": {
+              "girls": {
+                "type": "integer",
+                "minimum": -1,
+                "maximum": 30
+              },
+              "boys": {
+                "type": "integer",
+                "minimum": -1,
+                "maximum": 30
+              },
+              "others": {
+                "type": "integer",
+                "minimum": -1,
+                "maximum": 30
+              },
+              "people": {
+                "type": "integer",
+                "minimum": -1,
+                "maximum": 30
+              },
+              "no_humans": {
+                "type": "boolean",
+                "description": "true only when no person is in the pictures (a landscape, an animal, an object)."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

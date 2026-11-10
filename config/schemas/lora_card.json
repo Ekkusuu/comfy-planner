@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["what_it_does", "kind", "family", "trigger_words", "weight", "usage_notes"],
+  "properties": {
+    "what_it_does": {"type": "string", "minLength": 1, "description": "One or two plain sentences."},
+    "kind": {"type": "string", "enum": ["character", "style", "concept", "clothing", "pose", "other"]},
+    "family": {"type": "string", "enum": ["Anima", "Krea-2", "Qwen-Image", "SDXL", "Pony", "Illustrious", "SD1.5", "Flux", "other"]},
+    "trigger_words": {"type": "array", "items": {"type": "string"}, "maxItems": 12},
+    "weight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rec", "min", "max"],
+      "properties": {"rec": {"type": "number"}, "min": {"type": "number"}, "max": {"type": "number"}}
+    },
+    "usage_notes": {"type": "array", "items": {"type": "string"}, "maxItems": 6}
+  }
+}
