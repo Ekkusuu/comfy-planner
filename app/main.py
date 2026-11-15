@@ -124,7 +124,8 @@ def create_app(config: Config | None = None, comfy=None, start_worker: bool = Tr
         app.state.worker = QueueWorker(app.state.store, app.state.library, app.state.comfy, config, app.state.events)
         app.state.llm_server = llm_server or LlamaServer(config)
         app.state.llm = LlmClient(config, llm_transport)
-        app.state.lease = GpuLease(app.state.worker, app.state.comfy, app.state.llm_server)
+        app.state.lease = GpuLease(app.state.worker, app.state.comfy, app.state.llm_server, config)
+        app.state.worker.before_image = app.state.lease.free_for_images
         app.state.scanner = LoraScanner(app.state.db, config, app.state.comfy)
         app.state.civitai = CivitaiClient(config.cache_dir, transport=civitai_transport)
         app.state.updates = UpdateChecker(update_transport)
@@ -153,6 +154,7 @@ def create_app(config: Config | None = None, comfy=None, start_worker: bool = Tr
             await app.state.planner.close()
             await app.state.builder.close()
             await app.state.covers.close()
+            await app.state.lease.close()
             await app.state.llm_server.stop()      # never leave the LLM holding the GPU
             await app.state.worker.stop()
             await app.state.llm.close()
@@ -350,6 +352,7 @@ def register_routes(app: FastAPI):
                 "llm_gpu_layers": c.llm_gpu_layers, "llm_enable_thinking": c.llm_enable_thinking,
                 "llm_temperature": c.llm_temperature, "llm_max_tokens": c.llm_max_tokens,
                 "llm_start_timeout": c.llm_start_timeout, "llm_stop_timeout": c.llm_stop_timeout,
+                "llm_keep_loaded_seconds": c.llm_keep_loaded_seconds,
                 "llm_extra_args": c.llm_extra_args, "allow_draft_cards": c.allow_draft_cards,
                 "wildcards_enabled": c.wildcards_enabled, "wildcards_llm_picks_lists": c.wildcards_llm_picks_lists, "wildcards_ideas_per_prompt": c.wildcards_ideas_per_prompt,
                 "wildcards_entries_per_list": c.wildcards_entries_per_list, "wildcards_max_idea_entries": c.wildcards_max_idea_entries,

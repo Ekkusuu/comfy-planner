@@ -12,7 +12,7 @@
     'comfy_url', 'comfy_install_dir', 'comfy_cli',
     'max_images_per_job', 'max_images_per_request', 'max_loras', 'hires_default', 'safety_negative', 'strip_from_default_negative',
     'llm_model', 'llm_models', 'llm_ctx_size', 'llm_binary', 'llm_gpu_layers', 'llm_enable_thinking', 'llm_temperature',
-    'llm_max_tokens', 'llm_start_timeout', 'llm_stop_timeout', 'llm_extra_args',
+    'llm_max_tokens', 'llm_start_timeout', 'llm_stop_timeout', 'llm_keep_loaded_seconds', 'llm_extra_args',
     'allow_draft_cards', 'check_updates_at_start',
     'wildcards_enabled', 'wildcards_llm_picks_lists', 'wildcards_ideas_per_prompt', 'wildcards_entries_per_list', 'embeddings_enabled',
   ]
@@ -53,7 +53,7 @@
     } catch (e) {
       if (e.fields) {
         errors = Object.fromEntries(Object.entries(e.fields).map(([k, msg]) => [k, { msg, at: JSON.stringify(d[k]) }]))
-        if (Object.keys(e.fields).some((k) => ['llm_binary', 'llm_models', 'llm_start_timeout', 'llm_stop_timeout', 'llm_gpu_layers', 'llm_temperature', 'llm_max_tokens', 'llm_extra_args'].includes(k))) advanced = true
+        if (Object.keys(e.fields).some((k) => ['llm_binary', 'llm_models', 'llm_start_timeout', 'llm_stop_timeout', 'llm_keep_loaded_seconds', 'llm_gpu_layers', 'llm_temperature', 'llm_max_tokens', 'llm_extra_args'].includes(k))) advanced = true
       } else toastError(e)
     } finally {
       saving = false
@@ -301,6 +301,11 @@
               hint="Seconds"
               tip="How long to wait for the model to quit by itself before it is closed by force.">
               <input class="field num" id="s-stop" type="number" min="1" step="1" bind:value={d.llm_stop_timeout} style="width:110px" />
+            </SettingRow>
+            <SettingRow label="Keep it loaded" id="s-keep" changed={isNew('llm_keep_loaded_seconds')} error={err('llm_keep_loaded_seconds')}
+              hint="Seconds"
+              tip="How long the model stays loaded after planning, so the next plan starts at once. It is always closed first when an image is waiting to be generated. 0 closes it right away.">
+              <input class="field num" id="s-keep" type="number" min="0" step="30" bind:value={d.llm_keep_loaded_seconds} style="width:110px" />
             </SettingRow>
             <SettingRow label="Extra options" id="s-extra" changed={isNew('llm_extra_args')} error={err('llm_extra_args')}
               tip="Anything else to pass to llama-server, one item per entry, like --flash-attn. For advanced tuning only.">

@@ -150,7 +150,8 @@ def no_nvidia_smi(monkeypatch):
 
 @pytest.fixture
 def config(tmp_path) -> Config:
-    return Config(data_dir=tmp_path / "data", safety_negative=["nsfw", "nude", "nudity"], embeddings_enabled=False)    # tests never start a real embedding server
+    return Config(data_dir=tmp_path / "data", safety_negative=["nsfw", "nude", "nudity"], embeddings_enabled=False,
+                  llm_keep_loaded_seconds=0)    # tests never start a real embedding server; the LLM stops after each session (tests/test_gpu.py covers keeping it)
 
 
 @pytest.fixture

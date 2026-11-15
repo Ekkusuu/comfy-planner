@@ -494,6 +494,10 @@ class JobStore:
         row = self.db.row("SELECT id FROM jobs WHERE status = 'queued' ORDER BY position, id LIMIT 1")
         return self.get_job(row["id"]) if row else None
 
+    def has_runnable(self) -> bool:
+        """True when a job is queued or running (so an image may start at any moment)."""
+        return self.db.row("SELECT 1 AS x FROM jobs WHERE status IN ('queued', 'running') LIMIT 1") is not None
+
     def start_job(self, job_id: int):
         self.db.execute("UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, ?) WHERE id = ? AND status = 'queued'",
                         (now(), job_id))

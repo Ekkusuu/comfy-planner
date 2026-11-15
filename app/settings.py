@@ -27,13 +27,14 @@ KEYS = {
     "llm_gpu_layers": ("llm", "gpu_layers"), "llm_enable_thinking": ("llm", "enable_thinking"),
     "llm_temperature": ("llm", "temperature"), "llm_max_tokens": ("llm", "max_tokens"),
     "llm_start_timeout": ("llm", "start_timeout"), "llm_stop_timeout": ("llm", "stop_timeout"),
+    "llm_keep_loaded_seconds": ("llm", "keep_loaded_seconds"),
     "llm_extra_args": ("llm", "extra_args"),
 }
 EDITABLE = set(KEYS) | {"llm_models"}
 INT_RANGES = {"max_images_per_job": (1, 100), "max_images_per_request": (1, 2000), "max_loras": (0, 10), "llm_ctx_size": (512, 262144),
               "llm_gpu_layers": (0, 999), "llm_max_tokens": (64, 65536),
               "wildcards_ideas_per_prompt": (0, 10), "wildcards_entries_per_list": (1, 30), "wildcards_max_idea_entries": (0, 1000)}
-FLOAT_RANGES = {"llm_temperature": (0, 2), "llm_start_timeout": (10, 3600), "llm_stop_timeout": (1, 300)}
+FLOAT_RANGES = {"llm_temperature": (0, 2), "llm_start_timeout": (10, 3600), "llm_stop_timeout": (1, 300), "llm_keep_loaded_seconds": (0, 3600)}
 BOOLS = {"check_updates_at_start", "hires_default", "allow_draft_cards", "llm_enable_thinking", "wildcards_enabled", "wildcards_llm_picks_lists", "embeddings_enabled"}
 LISTS = {"safety_negative", "strip_from_default_negative", "llm_extra_args"}
 PATHS = {"comfy_cli", "llm_binary", "embeddings_model"}          # non-empty text

@@ -193,6 +193,132 @@ async def test_lease_holders_take_turns():
     assert [c for c in rec.calls if c.endswith(("start", "end")) and c[0] in "ab"] == ["a start", "a end", "b start", "b end"]
 
 
+# ---------- the LLM stays loaded for a while after planning ----------
+
+class KeepServer(FakeServer):
+    running = False
+
+    async def start(self):
+        await super().start()
+        self.running = True
+
+    async def stop(self):
+        await super().stop()
+        self.running = False
+
+
+class KeepWorker(FakeWorker):
+    busy = False                 # True: a job is waiting in the queue
+
+    def has_work(self):
+        return self.busy
+
+
+def keep_lease(seconds, busy=False):
+    from types import SimpleNamespace
+    rec = Recorder()
+    worker = KeepWorker(rec)
+    worker.busy = busy
+    return rec, worker, GpuLease(worker, FakeFreeComfy(rec), KeepServer(rec), SimpleNamespace(llm_keep_loaded_seconds=seconds))
+
+
+async def test_the_server_is_kept_loaded_until_an_image_needs_the_gpu():
+    rec, worker, lease = keep_lease(60)
+    async with lease:
+        pass
+    assert rec.calls == ["worker.hold", "comfy.free", "server.start", "worker.release"] and lease.kept     # not stopped
+    await lease.free_for_images()                                                                          # the worker's call before an image
+    assert rec.calls[-1] == "server.stop" and not lease.kept
+    await lease.free_for_images()
+    assert rec.calls.count("server.stop") == 1                                                             # nothing left to stop
+    await lease.close()
+
+
+async def test_a_kept_server_is_stopped_after_the_idle_time():
+    rec, worker, lease = keep_lease(0.15)
+    async with lease:
+        pass
+    await asyncio.sleep(0.05)
+    assert "server.stop" not in rec.calls
+    await asyncio.sleep(0.4)
+    assert rec.calls.count("server.stop") == 1 and not lease.kept
+    await lease.close()
+
+
+async def test_a_plan_arriving_before_the_idle_stop_keeps_the_server_and_moves_the_stop_later():
+    rec, worker, lease = keep_lease(0.3)
+    async with lease:
+        pass
+    await asyncio.sleep(0.2)
+    async with lease:                                  # the next plan: the server is already loaded
+        await asyncio.sleep(0.25)                      # longer than the first deadline: the old timer must not stop it now
+        assert "server.stop" not in rec.calls and lease.active
+    assert rec.calls.count("server.start") == 2        # the fake counts a start; the real one returns at once when running
+    await asyncio.sleep(0.15)
+    assert "server.stop" not in rec.calls              # the new 0.3 s are not over yet
+    await asyncio.sleep(0.4)
+    assert rec.calls.count("server.stop") == 1
+    await lease.close()
+
+
+async def test_the_server_is_stopped_at_once_when_the_queue_has_work_or_the_session_failed():
+    rec, worker, lease = keep_lease(60, busy=True)
+    async with lease:
+        pass
+    assert rec.calls[-2:] == ["server.stop", "worker.release"] and not lease.kept       # same order as without keeping
+    rec, worker, lease = keep_lease(60)
+    with pytest.raises(RuntimeError):
+        async with lease:
+            raise RuntimeError("plan failed")
+    assert rec.calls[-2:] == ["server.stop", "worker.release"] and not lease.kept
+    rec, worker, lease = keep_lease(60)
+    async with lease:
+        lease.stop_on_leave()                           # the LLM server failed during the session
+    assert rec.calls[-2:] == ["server.stop", "worker.release"]
+    rec, worker, lease = keep_lease(0)                  # 0 = the old behaviour
+    async with lease:
+        pass
+    assert rec.calls[-2:] == ["server.stop", "worker.release"]
+
+
+async def test_closing_the_lease_ends_the_idle_timer():
+    rec, worker, lease = keep_lease(0.1)
+    async with lease:
+        pass
+    await lease.close()
+    await asyncio.sleep(0.3)
+    assert "server.stop" not in rec.calls              # the app's shutdown stops the process itself
+
+
+async def test_the_worker_stops_a_kept_server_before_it_generates(store, worker, tagwf, comfy):
+    rec = Recorder()
+    from types import SimpleNamespace
+    lease = GpuLease(worker, comfy, KeepServer(rec), SimpleNamespace(llm_keep_loaded_seconds=60))
+    worker.before_image = lease.free_for_images
+    async with lease:
+        make_job(store, tagwf["id"], count=1, queue=False)      # a draft: no work waits yet
+    assert lease.kept and rec.calls == ["server.start"]
+    job = make_job(store, tagwf["id"], count=1, queue=True)
+    await asyncio.wait_for(worker.tick(), 5)
+    assert rec.calls == ["server.start", "server.stop"] and not lease.kept       # stopped before the image ran
+    assert len(comfy.graphs) == 1 and store.get_job(job["id"])["status"] == "done"
+    await lease.close()
+
+
+async def test_a_changed_command_line_restarts_a_running_server(llm_config):
+    server = FakeScriptServer(llm_config)
+    await server.start()
+    first = server.proc
+    await server.start()
+    assert server.proc is first                                # same settings: the loaded server is reused
+    server.delay = 1                                           # a different command line
+    await server.start()
+    try:
+        assert server.proc is not first and first.returncode is not None and server.running
+    finally:
+        await server.stop()
+
+
 # ---------- the queue worker waits for the image boundary ----------
 
 async def test_hold_waits_for_current_image_and_blocks_the_next(store, worker, tagwf, comfy):

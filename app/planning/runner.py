@@ -206,6 +206,7 @@ class PlanRunner:
                     done += 1
                     self._announce_line()
                     if restart:
+                        self.lease.stop_on_leave()      # a failed server is stopped, not kept for the next plan
                         break
         except asyncio.CancelledError:
             raise

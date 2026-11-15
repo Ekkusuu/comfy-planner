@@ -33,6 +33,7 @@ class QueueWorker:
         self._preview: tuple[int, int, bytes] | None = None   # (job_id, number, bytes): newest step preview of the image running now
         self._preview_signalled = 0.0
         self._task: asyncio.Task | None = None
+        self.before_image = None                 # async callable run before each image: stops an LLM kept loaded (GpuLease.free_for_images)
 
     # ---------- lifecycle ----------
 
@@ -71,6 +72,10 @@ class QueueWorker:
         self._released.set()
         self.wake()
         self._emit("queue")
+
+    def has_work(self) -> bool:
+        """True when images would start now if the GPU were free: a job is queued or running and the user hasn't paused the queue."""
+        return not self.paused_by_user and self.store.has_runnable()
 
     def state(self) -> dict:
         return {"paused": self.paused_by_user, "held": self.held, "unreachable": self.unreachable, "current": self.current}
@@ -130,13 +135,23 @@ class QueueWorker:
                 break   # cancelled while running
             if image["status"] != "pending":
                 continue
-            await self._released.wait()   # the GPU lease may be holding the queue between images
+            await self._gpu_ready()
             if not await self._run_image(job, image, wf, api_graph):
                 self.store.requeue_job(job["id"])   # ComfyUI went away: try again later
                 self._emit("job", job_id=job["id"], status="queued")
                 return
         final = self.store.finish_job(job["id"])
         self._emit("job", job_id=job["id"], status=final["status"])
+
+    async def _gpu_ready(self):
+        """Wait until the GPU lease isn't holding the queue (it may hold it between images) and no LLM is left loaded on the GPU.
+        Nothing here may yield between the last check and the start of the image, so a lease taken meanwhile is noticed and waited for."""
+        while True:
+            await self._released.wait()
+            if self.before_image:
+                await self.before_image()
+            if self._released.is_set():
+                return
 
     async def _run_image(self, job: dict, image: dict, wf: dict, api_graph: dict) -> bool:
         """Generate one image. Returns False if ComfyUI is unreachable (image goes back to pending)."""

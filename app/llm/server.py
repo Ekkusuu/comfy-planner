@@ -79,6 +79,7 @@ class LlamaServer:
         self.proc: asyncio.subprocess.Process | None = None
         self.memory_flags: list[str] = []          # set by start() from the binary's --help
         self.speed_flags: list[str] = []
+        self._launched: list[str] | None = None    # the command line of the running process
 
     @property
     def url(self) -> str:
@@ -98,9 +99,13 @@ class LlamaServer:
     # ---------- start ----------
 
     async def start(self):
-        """Launch the server and wait until /health says the model is loaded."""
+        """Launch the server and wait until /health says the model is loaded. One that is already running (kept loaded
+        between plans) is reused unless the settings behind its command line have changed since."""
         if self.running:
-            return
+            if self.command() == self._launched:
+                return
+            log.info("the LLM settings changed; restarting llama-server")
+            await self.stop()
         c = self.config
         if not c.llm_binary.is_file():
             raise LlmServerError(f"llama-server not found at {c.llm_binary}. Set [llm] binary in config/app.toml.")
@@ -118,7 +123,8 @@ class LlamaServer:
         added = [*self.memory_flags, *self.speed_flags]
         log.info("starting llama-server with %s%s", model.name, f" ({' '.join(added)})" if added else "")
         kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
-        self.proc = await asyncio.create_subprocess_exec(*self.command(), stdin=asyncio.subprocess.DEVNULL,
+        self._launched = self.command()
+        self.proc = await asyncio.create_subprocess_exec(*self._launched, stdin=asyncio.subprocess.DEVNULL,
                                                          stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, **kwargs)
         try:
             await self._wait_ready()
