@@ -49,6 +49,20 @@ def test_thumb_is_cached_clamped_and_regenerated(client, config):
     assert client.get("/api/images/999/thumb").status_code == 404
 
 
+def test_the_small_thumb_is_cut_from_the_default_one_and_old_images_still_get_theirs_on_request(client, config):
+    from app.thumbs import make_thumbs
+    _, (first, second) = make_images(client, config)
+    assert not list(config.thumbs_dir.glob("*.webp")) if config.thumbs_dir.exists() else True      # nothing was made ahead for these
+    assert client.get(f"/api/images/{first}/thumb?size=128").status_code == 200                    # no 512 copy yet: cut from the picture
+    assert (config.thumbs_dir / f"{first}-128.webp").is_file() and not (config.thumbs_dir / f"{first}-512.webp").is_file()
+    image = client.get(f"/api/images/{second}").json()
+    make_thumbs(config, second, config.images_dir / image["file_path"])
+    assert (config.thumbs_dir / f"{second}-512.webp").is_file() and (config.thumbs_dir / f"{second}-128.webp").is_file()
+    with Image.open(config.thumbs_dir / f"{second}-128.webp") as img:
+        assert max(img.size) == 128
+    assert not list(config.thumbs_dir.glob("*.tmp"))
+
+
 def test_thumb_without_file_is_404(client, config):
     wf = client.post("/api/workflows/import", json={"path": str(FIXTURES / f"{TAGWF}.json")}).json()
     job = client.post("/api/jobs", json={"workflow_id": wf["id"], "fields": {"prompts": ["a"]}}).json()

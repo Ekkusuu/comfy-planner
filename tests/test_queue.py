@@ -160,6 +160,23 @@ async def test_clear_hides_a_finished_job_and_keeps_its_images(store, worker, ta
     assert store.retry_job(waiting["id"], "all")["cleared_at"] is None    # retrying brings it back to the list
 
 
+async def test_a_saved_image_gets_its_two_thumbnails_without_a_request(store, worker, tagwf, config):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (900, 600), "teal").save(buf, "PNG")
+
+    async def view(image):
+        return buf.getvalue()
+    worker.comfy.view = view                                                    # the shared fake sends bytes that aren't a picture
+    job = make_job(store, tagwf["id"], queue=True)
+    await run_until_idle(worker)
+    await asyncio.gather(*worker._thumb_tasks)                                  # cut in a thread after the image is saved
+    image = store.get_job(job["id"])["images"][0]
+    assert image["status"] == "done"
+    assert (config.thumbs_dir / f"{image['id']}-512.webp").is_file() and (config.thumbs_dir / f"{image['id']}-128.webp").is_file()
+
+
 async def test_the_job_list_sends_cleared_jobs_slim(store, worker, tagwf):
     kept, gone = make_job(store, tagwf["id"], queue=True), make_job(store, tagwf["id"], queue=True)
     store.db.execute("UPDATE jobs SET meta = ? WHERE id IN (?, ?)", ('{"request": "a cat", "scene": {"big": "x"}}', kept["id"], gone["id"]))

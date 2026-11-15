@@ -10,6 +10,7 @@ from app.config import Config
 from app.events import EventBus
 from app.library.workflows import WorkflowLibrary
 from app.queue.jobs import JobStore
+from app.thumbs import BadImage, make_thumbs
 
 log = logging.getLogger("worker")
 POLL_SECONDS = 2.0
@@ -33,6 +34,7 @@ class QueueWorker:
         self._preview: tuple[int, int, bytes] | None = None   # (job_id, number, bytes): newest step preview of the image running now
         self._preview_signalled = 0.0
         self._task: asyncio.Task | None = None
+        self._thumb_tasks: set[asyncio.Task] = set()   # thumbnails being cut in threads (kept so they aren't garbage collected)
         self.before_image = None                 # async callable run before each image: stops an LLM kept loaded (GpuLease.free_for_images)
 
     # ---------- lifecycle ----------
@@ -170,6 +172,7 @@ class QueueWorker:
             if not outputs:
                 raise ComfyError("ComfyUI finished but returned no saved image.")
             path = self._save(job_id, image["idx"], await self.comfy.view(outputs[0]))
+            self._cut_thumbs(image["id"], path)
             store.set_image(image["id"], "done", file_path=path, recipe=recipe, prompt_id=(self.current or {}).get("prompt_id"))
             self._emit("image", job_id=job_id, image_id=image["id"], idx=image["idx"], status="done", file=path)
         except ComfyUnreachable:
@@ -223,6 +226,18 @@ class QueueWorker:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         return rel
+
+    def _cut_thumbs(self, image_id: int, rel: str):
+        """Make the thumbnails the Gallery and the Queue ask for first in a thread, without holding up the next image.
+        A page that asks before they are done just makes them itself (thumbs.ensure_thumb); older images still get theirs that way."""
+        def cut():
+            try:
+                make_thumbs(self.config, image_id, self.config.images_dir / rel)
+            except (BadImage, OSError):
+                log.warning("could not cut thumbnails for image %s", image_id, exc_info=True)
+        task = asyncio.ensure_future(asyncio.to_thread(cut))
+        self._thumb_tasks.add(task)
+        task.add_done_callback(self._thumb_tasks.discard)
 
     # ---------- cancel ----------
 
