@@ -53,3 +53,22 @@ async def test_set_url_forgets_the_kept_answer():
     await comfy.set_url("http://127.0.0.1:9999")
     assert comfy._stats is None
     await comfy.close()
+
+
+async def test_the_lora_list_uses_the_held_object_info_until_a_rescan(config, db, tmp_path):
+    from app.library.loras import LoraScanner
+
+    class Spy:
+        asked = []
+
+        async def object_info(self, refresh=False):
+            self.asked.append(refresh)
+            return {"LoraLoaderModelOnly": {"input": {"required": {"lora_name": [["a.safetensors", "sub\\b.safetensors"]]}}}}
+
+    scanner = LoraScanner(db, config, Spy())
+    assert await scanner.names() == ["a.safetensors", "sub/b.safetensors"]
+    await scanner.names()
+    await scanner.scan()
+    assert Spy.asked == [False, False, False]                   # a plain list never goes back to ComfyUI
+    await scanner.scan(refresh=True)                            # Rescan does
+    assert Spy.asked[-1] is True

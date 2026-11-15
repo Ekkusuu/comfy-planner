@@ -57,10 +57,11 @@ class LoraScanner:
     def folders(self) -> list[Path]:
         return model_dirs(self.config.comfy_install_dir, "loras")
 
-    async def names(self) -> list[str]:
-        """LoRA names ComfyUI offers (from /object_info); if it isn't running, whatever is in the folders."""
+    async def names(self, refresh: bool = False) -> list[str]:
+        """LoRA names ComfyUI offers (from /object_info, the copy the app already holds unless `refresh`: Rescan and the workflow
+        re-check read it again); if it isn't running, whatever is in the folders."""
         try:
-            oi = await self.comfy.object_info(refresh=True)
+            oi = await self.comfy.object_info(refresh=refresh)
             listed = oi.get("LoraLoaderModelOnly", {}).get("input", {}).get("required", {}).get("lora_name", [[]])[0]
             if listed:
                 return [n for n in (str(n).replace("\\", "/") for n in listed) if not self.is_deleted(n)]
@@ -79,10 +80,10 @@ class LoraScanner:
                 return path
         return None
 
-    async def scan(self) -> list[LoraFile]:
-        """Every LoRA with its size, mtime and SHA256 (cached files are instant)."""
+    async def scan(self, refresh: bool = False) -> list[LoraFile]:
+        """Every LoRA with its size, mtime and SHA256 (cached files are instant). `refresh` asks ComfyUI for its list again."""
         files = []
-        for name in await self.names():
+        for name in await self.names(refresh):
             path = self.resolve(name)
             if path is None:
                 files.append(LoraFile(name, None))
