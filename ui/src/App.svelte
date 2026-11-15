@@ -2,12 +2,14 @@
   import { onMount } from 'svelte'
   import Icon from './Icon.svelte'
   import Logo from './Logo.svelte'
+  import UpdateNotice from './UpdateNotice.svelte'
   import Plan from './pages/Plan.svelte'
   import Queue from './pages/Queue.svelte'
   import Gallery from './pages/Gallery.svelte'
   import Library from './pages/Library.svelte'
   import Settings from './pages/Settings.svelte'
   import Guide from './pages/Guide.svelte'
+  import Setup from './pages/Setup.svelte'
   import { route, boot, activeCount, toasts, dismiss } from './store.svelte.js'
   import { pop } from './motion.js'
 
@@ -23,7 +25,7 @@
   const wheel = (e) => {
     if (e.target instanceof HTMLInputElement && e.target.type === 'number' && e.target === document.activeElement) e.target.blur()
   }
-  const pages = { plan: Plan, queue: Queue, gallery: Gallery, library: Library, how: Guide, settings: Settings }
+  const pages = { plan: Plan, queue: Queue, gallery: Gallery, library: Library, how: Guide, settings: Settings, setup: Setup }
   const Page = $derived(pages[route.name])
 </script>
 
@@ -49,6 +51,8 @@
 
   <Page />
 </div>
+
+<UpdateNotice />
 
 <div class="toasts" role="status" aria-live="polite">
   {#each toasts as t (t.id)}

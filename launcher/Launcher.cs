@@ -136,6 +136,7 @@ namespace ComfyPlanner
         private volatile string _message;      // queued MessageBox text, shown on the UI thread
         private volatile string[] _balloon;    // queued { title, text } balloon
         private bool _quitting;
+        private bool _firstStart;              // no .venv yet: the first "uv sync" sets the environment up (one time)
 
         public TrayContext(string root)
         {
@@ -162,6 +163,10 @@ namespace ComfyPlanner
 
             // Tray menu.
             _menu = new ContextMenuStrip();
+            ToolStripMenuItem versionItem = new ToolStripMenuItem("Comfy Planner " + AppVersion());
+            versionItem.Enabled = false;      // a header that shows the version, not a command
+            _menu.Items.Add(versionItem);
+            _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add("Open", null, new EventHandler(OnOpenClick));
             _menu.Items.Add("Open logs folder", null, new EventHandler(OnLogsClick));
             _menu.Items.Add(new ToolStripSeparator());
@@ -169,7 +174,7 @@ namespace ComfyPlanner
 
             _tray = new NotifyIcon();
             _tray.Icon = LoadAppIcon();
-            _tray.Text = "Comfy Planner";
+            _tray.Text = "Comfy Planner " + AppVersion();
             _tray.ContextMenuStrip = _menu;
             _tray.DoubleClick += new EventHandler(OnOpenClick);
             _tray.Visible = true;
@@ -366,7 +371,9 @@ namespace ComfyPlanner
 
                 // Normally a few seconds; a cold start (antivirus scanning the venv after a reboot) can take
                 // much longer, so wait long. A server that crashes is noticed right away instead.
-                string health = WaitForHealth(300);
+                // The very first start also downloads and installs the Python packages, so it gets longer.
+                int waitSeconds = _firstStart ? 900 : 300;
+                string health = WaitForHealth(waitSeconds);
                 if (health == null)
                 {
                     if (_quitRequested)
@@ -374,9 +381,9 @@ namespace ComfyPlanner
                         return;
                     }
                     bool exited = BackendExited();
-                    Log(exited ? "the server exited before it answered" : "the app did not answer on " + Program.AppUrl + " within 5 minutes");
+                    Log(exited ? "the server exited before it answered" : "the app did not answer on " + Program.AppUrl + " within " + (waitSeconds / 60) + " minutes");
                     _message = (exited ? "The Comfy Planner server stopped while starting."
-                                       : "Comfy Planner did not answer on " + Program.AppUrl + " within 5 minutes.")
+                                       : "Comfy Planner did not answer on " + Program.AppUrl + " within " + (waitSeconds / 60) + " minutes.")
                         + "\r\n\r\nCheck the log:\r\n" + _logPath;
                     return;
                 }
@@ -467,9 +474,28 @@ namespace ComfyPlanner
             if (uv == null)
             {
                 Log("uv.exe was not found");
-                _message = "uv.exe was not found on PATH or in %USERPROFILE%\\.local\\bin.\r\n\r\n"
+                _message = "uv.exe was not found next to Comfy Planner, on PATH or in %USERPROFILE%\\.local\\bin.\r\n\r\n"
                     + "Install uv (https://docs.astral.sh/uv/) and try again.";
                 return;
+            }
+
+            // The installed copy carries its own uv.exe. Then the packages come from uv.lock exactly (--frozen)
+            // and without the test tools (--no-dev). A checkout that uses uv from PATH keeps the plain "uv sync".
+            bool bundled = string.Equals(uv, Path.Combine(_root, "uv.exe"), StringComparison.OrdinalIgnoreCase);
+            // From a checkout, --inexact keeps packages a developer added to .venv by hand (as "uv run" did).
+            string syncArgs = bundled ? "sync --frozen --no-dev" : "sync --inexact";
+
+            // uv only sets the environment up. The server is then started with the environment's own python, so
+            // no uv process stays alive (and holds memory) for as long as the server runs.
+            string python = Path.Combine(_root, ".venv\\Scripts\\python.exe");
+            string serverArgs = "-m uvicorn app.main:app --host 127.0.0.1 --port 8765";
+
+            // First start: the .venv is created and the packages are installed by the first "uv sync" below.
+            _firstStart = !Directory.Exists(Path.Combine(_root, ".venv"));
+            if (_firstStart)
+            {
+                Log("no .venv yet; the first start sets up the Python environment (one time)");
+                Balloon("Comfy Planner", "First start: setting up (one time). This can take a few minutes.");
             }
 
             try
@@ -480,46 +506,96 @@ namespace ComfyPlanner
                     new UTF8Encoding(false));
                 _backendLog.AutoFlush = true;
 
-                ProcessStartInfo info = new ProcessStartInfo(
-                    uv, "run uvicorn app.main:app --host 127.0.0.1 --port 8765");
-                info.WorkingDirectory = _root;
-                info.UseShellExecute = false;
-                info.CreateNoWindow = true;               // no console window
-                info.RedirectStandardOutput = true;
-                info.RedirectStandardError = true;
-                info.StandardOutputEncoding = Encoding.UTF8;
-                info.StandardErrorEncoding = Encoding.UTF8;
-                info.EnvironmentVariables["PYTHONUNBUFFERED"] = "1";
-
-                Process process = new Process();
-                process.StartInfo = info;
-                process.OutputDataReceived += OnBackendOutput;
-                process.ErrorDataReceived += OnBackendOutput;
-
+                // Step 1: bring the Python environment up to date, and wait for it. On the very first start this
+                // downloads and installs the packages, so it gets the longer limit.
+                int syncSeconds = _firstStart ? 900 : 300;
+                Process sync = StartLogged(uv, syncArgs);
+                if (sync == null)
+                {
+                    return; // quit was clicked
+                }
+                Log("syncing the Python environment: uv " + syncArgs + " (pid " + sync.Id + ")");
+                if (!sync.WaitForExit(syncSeconds * 1000))
+                {
+                    StopBackend(); // kills the stuck uv; it is the process held in _backend
+                    Log("uv sync did not finish within " + (syncSeconds / 60) + " minutes");
+                    _message = "Setting up the Python environment did not finish within " + (syncSeconds / 60) + " minutes.\r\n\r\n"
+                        + "Check the log:\r\n" + _logPath;
+                    return;
+                }
+                sync.WaitForExit(); // lets the output handlers write the last lines
+                int syncCode = sync.ExitCode;
+                lock (_serverLock)
+                {
+                    if (_backend == sync)
+                    {
+                        _backend = null;
+                    }
+                }
+                sync.Dispose();
                 if (_quitRequested)
                 {
                     return;
                 }
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                lock (_serverLock)
+                if (syncCode != 0 || !File.Exists(python))
                 {
-                    _backend = process;
+                    Log("uv sync failed (exit code " + syncCode + ")");
+                    _message = "The Python environment could not be set up (uv sync failed).\r\n\r\n"
+                        + "Check the log:\r\n" + _logPath;
+                    return;
                 }
-                Log("started the server with " + uv + " (pid " + process.Id + ")");
 
-                if (_quitRequested)
+                // Step 2: the server itself, started directly with the environment's python.
+                Process process = StartLogged(python, serverArgs);
+                if (process == null)
                 {
-                    StopBackend(); // quit was clicked while we were starting
+                    return; // quit was clicked
                 }
+                Log("started the server with " + python + " (pid " + process.Id + ")");
             }
             catch (Exception ex)
             {
                 Log("the server could not be started: " + ex.Message);
                 _message = "The server could not be started: " + ex.Message + "\r\n\r\nSee " + _logPath;
             }
+        }
+
+        // Start a hidden process in the project folder, with its output going to app.log, and remember it in
+        // _backend so that Quit can stop it. Returns null (and starts nothing) when quit has been requested.
+        private Process StartLogged(string file, string args)
+        {
+            if (_quitRequested)
+            {
+                return null;
+            }
+
+            ProcessStartInfo info = new ProcessStartInfo(file, args);
+            info.WorkingDirectory = _root;
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;               // no console window
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            info.StandardOutputEncoding = Encoding.UTF8;
+            info.StandardErrorEncoding = Encoding.UTF8;
+            info.EnvironmentVariables["PYTHONUNBUFFERED"] = "1";
+
+            Process process = new Process();
+            process.StartInfo = info;
+            process.OutputDataReceived += OnBackendOutput;
+            process.ErrorDataReceived += OnBackendOutput;
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            lock (_serverLock)
+            {
+                _backend = process;
+            }
+            if (_quitRequested)
+            {
+                StopBackend(); // quit was clicked while we were starting
+            }
+            return process;
         }
 
         private void OnBackendOutput(object sender, DataReceivedEventArgs e)
@@ -563,7 +639,9 @@ namespace ComfyPlanner
                 if (!slowNoticeShown && clock.Elapsed.TotalSeconds > 20)
                 {
                     slowNoticeShown = true;
-                    Balloon("Comfy Planner", "Still starting, this is taking longer than usual...");
+                    Balloon("Comfy Planner", _firstStart
+                        ? "First start: setting up (one time). Still working, this can take a few minutes..."
+                        : "Still starting, this is taking longer than usual...");
                 }
                 Thread.Sleep(500);
             }
@@ -797,6 +875,20 @@ namespace ComfyPlanner
             _balloon = new string[] { title, text };
         }
 
+        // The version stamped into the exe by launcher\build.ps1 (the product version of its file properties).
+        private static string AppVersion()
+        {
+            try
+            {
+                string version = FileVersionInfo.GetVersionInfo(Application.ExecutablePath).ProductVersion;
+                return string.IsNullOrEmpty(version) ? "" : version;
+            }
+            catch (Exception)
+            {
+                return "";
+            }
+        }
+
         private Icon LoadAppIcon()
         {
             try
@@ -820,9 +912,21 @@ namespace ComfyPlanner
             return SystemIcons.Application;
         }
 
-        // uv.exe from PATH, then the standard per-user install location.
-        private static string FindUv()
+        // uv.exe next to this exe (the installed copy), then PATH, then the standard per-user install location.
+        private string FindUv()
         {
+            try
+            {
+                string bundled = Path.Combine(_root, "uv.exe");
+                if (File.Exists(bundled))
+                {
+                    return bundled;
+                }
+            }
+            catch (Exception)
+            {
+            }
+
             try
             {
                 string path = Environment.GetEnvironmentVariable("PATH");

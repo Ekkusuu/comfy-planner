@@ -317,3 +317,81 @@ async def test_the_llms_slot_for_a_list_is_overruled_when_the_entries_fit_anothe
     adult_ctx.embedder = None
     c.embeddings_enabled = False
     assert await O.fitting_slot(adult_ctx, smiles, "lighting") == "lighting"          # without meaning search the LLM's slot stands
+
+
+# ---------- adult content is held back below nsfw, by meaning ----------
+
+LIGHTS = ["soft light glow", "warm light glow", "gentle colour glow"]
+
+
+@pytest.mark.parametrize("rating", ["general", "sensitive"])
+async def test_general_pictures_never_get_an_adult_entry(adult_ctx, rating):
+    mixed = wlist("pose/mixed", "pose", ["adultmark on the bed", "arms crossed", "leaning on a railing"])
+    adult_ctx.wildcards.lists = lambda: [mixed, wlist("camera/camera-shot", "shot", SHOTS)]  # noqa: E731
+    got = await O.build(adult_ctx, "a portrait", "", [("pose/mixed", "why", "pose")], [], None,
+                        random.Random(1), images=1, rating=rating)
+    assert got is not None
+    assert not any("adultmark" in o["text"] for o in got.options(0))
+
+
+async def test_nsfw_folder_list_with_ordinary_entries_is_not_held_back(adult_ctx):
+    from app.wildcards.ideas import choose
+    calm = wlist("NSFW/calm-light", "nsfw", LIGHTS)
+    lists = [wlist("camera/camera-shot", "shot", SHOTS), calm]
+    found = await O.adult_content(adult_ctx, lists)
+    assert O.ADULT_LIST_SHARE == 0.5 and calm.name not in found.lists
+    out = await O.slot_lists(adult_ctx, [], lists, set(), {"lighting"}, "a portrait", held_back=found.lists)
+    assert any(l.name == calm.name for l in out.get("lighting", []))
+    out_fallback = await O.slot_lists(adult_ctx, [], lists, set(), {"lighting"}, "a portrait", held_back=None)
+    assert all(l.name != calm.name for l in out_fallback.get("lighting", []))
+    got = choose(lists, "a portrait", "", adult_ctx.config, random.Random(0), held_back=found.lists)
+    assert calm.name in {c.wild.name for c in got}
+
+
+async def test_ordinary_folder_list_with_mostly_adult_entries_is_held_back(adult_ctx):
+    from app.wildcards.ideas import choose
+    from app.planning.content_level import judged
+    mixed = wlist("pose/mixed", "pose", ["adultmark on the bed", "adultmark by the window", "adultmark under a sheet",
+                                        "soft light glow", "warm light glow"])
+    lists = [wlist("camera/camera-shot", "shot", SHOTS), mixed]
+    found = await O.adult_content(adult_ctx, lists)
+    assert mixed.name in found.lists and judged([e for l in lists for e in l.entries])
+    out = await O.slot_lists(adult_ctx, [], lists, set(), {"lighting"}, "a portrait", held_back=found.lists)
+    assert all(l.name != mixed.name for l in out.get("lighting", []))
+    got = choose(lists, "a portrait", "", adult_ctx.config, random.Random(0), held_back=found.lists)
+    assert mixed.name not in {c.wild.name for c in got}
+
+
+async def test_user_set_nsfw_role_makes_the_whole_list_adult(adult_ctx):
+    calm = WildList("pose/calm", "pose", "nsfw", "pose", True, ["red kimono", "silk robe"], role_set=True)
+    found = await O.adult_content(adult_ctx, [calm, wlist("camera/camera-shot", "shot", SHOTS)])
+    assert calm.name in found.lists and set(calm.entries) <= found.entries
+
+
+async def test_without_embeddings_nsfw_folder_counts_as_adult_and_nsfw_still_builds(adult_ctx):
+    calm = wlist("NSFW/calm", "nsfw", ["red kimono", "silk robe"])
+    adult_ctx.wildcards.lists = lambda: [wlist("camera/camera-shot", "shot", SHOTS), calm]  # noqa: E731
+    adult_ctx.embedder = None
+    adult_ctx.config.embeddings_enabled = False
+    found = await O.adult_content(adult_ctx, adult_ctx.wildcards.lists())
+    assert calm.name in found.lists and set(calm.entries) <= found.entries
+    got = await O.build(adult_ctx, "a portrait", "", [("camera/camera-shot", "why", "camera")], [], None,
+                        random.Random(1), images=1, rating="nsfw")
+    assert got is not None
+
+
+async def test_nsfw_picture_is_offered_adult_entries_from_an_ordinary_folder(adult_ctx):
+    mixed = wlist("pose/mixed", "pose", ["adultmark on the bed", "arms crossed", "leaning on a railing"])
+    adult_ctx.wildcards.lists = lambda: [mixed, wlist("camera/camera-shot", "shot", SHOTS)]  # noqa: E731
+    got = await O.build(adult_ctx, "a portrait", "", [("pose/mixed", "why", "pose")], [], None,
+                        random.Random(1), images=1, rating="nsfw")
+    assert got is not None and any("adultmark" in o["text"] for o in got.options(0))
+
+
+def test_without_drops_emptied_lists_and_slots():
+    a = wlist("camera/a", "shot", ["x", "y"])
+    b = wlist("pose/b", "pose", ["z"])
+    out = O.without({"camera": [a], "pose": [b]}, {"x"})
+    assert out["camera"][0].entries == ["y"] and out["pose"][0].entries == ["z"]
+    assert O.without({"camera": [a]}, {"x", "y"}) == {}
+    assert O.without({"camera": [a], "pose": [b]}, {"x", "y", "z"}) == {}

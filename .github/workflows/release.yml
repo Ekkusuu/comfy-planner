@@ -1,0 +1,59 @@
+# Builds the Windows installer and publishes it as a GitHub release.
+#
+# Release: set `version` in pyproject.toml, commit, then push a matching tag:
+#   git tag v0.1.0
+#   git push origin v0.1.0
+# The tag must equal "v" + the pyproject version, or the build stops.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write          # create the release and upload the installer
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Check the tag matches the version
+        shell: pwsh
+        run: |
+          $version = [regex]::Match((Get-Content -Raw pyproject.toml), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match pyproject.toml version $version"
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup install failed" }
+          }
+
+      - name: Build the installer
+        shell: pwsh
+        run: scripts\build_release.ps1 -Version $env:VERSION
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            "dist\ComfyPlanner-Setup-$env:VERSION.exe" `
+            "dist\ComfyPlanner-Setup-$env:VERSION.exe.sha256" `
+            --title "Comfy Planner $env:VERSION" `
+            --generate-notes

@@ -61,6 +61,12 @@ async def adult_entries(ctx: PlanContext, entries: list[str], minimum: str = "ns
     return {e for e in entries if memo.get(e)}
 
 
+def judged(entries: list[str]) -> bool:
+    """Has every one of these texts been judged already (adult_entries at the nsfw level)? False while the vectors are still being computed."""
+    memo = _known.get((ADULT_ANCHORS["nsfw"], ORDINARY_ANCHORS), {})
+    return all(e in memo for e in entries if e.strip())
+
+
 async def shows_adult(ctx: PlanContext, description: str, rating: str) -> bool | None:
     """Does a description show adult content at this rating (nsfw: nudity or sex; explicit: plainly sexual)? One of its parts has to be adult
     (see the module doc). None when that cannot be told (no search by meaning), so callers leave the description alone."""

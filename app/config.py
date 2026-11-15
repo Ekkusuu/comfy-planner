@@ -74,6 +74,8 @@ class Config:
     host: str = "127.0.0.1"
     port: int = 8765
     data_dir: Path = ROOT / "data"
+    update_repo: str = "Ekkusuu/comfy-planner"     # GitHub "owner/name" asked for the latest release; empty = never check
+    check_updates_at_start: bool = False           # off: the app contacts GitHub only when the user presses "Check for updates"
     max_images_per_job: int = 16
     max_images_per_request: int = 200              # most images one planned request may add up to
     hires_default: bool = True
@@ -187,6 +189,8 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     cfg.port = app.get("port", cfg.port)
     data = Path(app.get("data_dir", "data"))
     cfg.data_dir = data if data.is_absolute() else ROOT / data
+    cfg.update_repo = str(app.get("update_repo", cfg.update_repo)).strip()
+    cfg.check_updates_at_start = bool(app.get("check_updates_at_start", cfg.check_updates_at_start))
     cfg.max_images_per_job = jobs.get("max_images_per_job", cfg.max_images_per_job)
     cfg.max_images_per_request = jobs.get("max_images_per_request", cfg.max_images_per_request)
     cfg.hires_default = jobs.get("hires_default", cfg.hires_default)

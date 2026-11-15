@@ -23,8 +23,8 @@ Slots vs. phrase matches: a *slot* is an aspect of the picture (where, which sho
 already fixes it - it uses one of the slot role's words ("city"), or contains an entry that feeds the slot as a whole phrase
 (`given_roles`) - no list is offered for that slot, whoever picked it: a phrase match on a slot list means "the brief decided
 this already", not "offer this list". For lists that serve no slot a phrase match means "this list is about what was asked for",
-so it is offered. That is relevance, not content filtering; entries are not held back by the picture's rating (a nsfw or explicit picture is also
-offered adult entries, offers.build).
+so it is offered. Adult lists (by their entries' meaning, offers.adult_content) never fill an open slot on their own; a picture rated below nsfw is
+offered no adult entries, and a nsfw or explicit picture is also offered adult entries of the whole library (offers.build).
 Which entries: each prompt gets its own slice of a shuffled copy of every chosen list, so the images of a job get
 different ingredients. The draw is seeded, so it can be repeated, and sized to fit `max_idea_entries` per call."""
 import random
@@ -39,7 +39,8 @@ from app.planning.rank import rank_scored
 from app.wildcards.expand import expand, find_refs, find_tokens
 from app.wildcards.store import Catalog, WildcardStore, WildList
 
-ADULT_ROLE = "nsfw"         # lists with this role are never put into a slot on their own: they join a slot for a nsfw or explicit picture (offers.adult_pools)
+ADULT_ROLE = "nsfw"         # a role the user can set to say "this whole list is adult" (offers.adult_content); which lists and entries are adult is otherwise
+                            # read from the entries' meaning, wherever they are kept. The folder's default role only counts when meaning cannot be told.
 MAX_IDEA_CHARS = 120
 MAX_IDEA_ENTRY = 80         # longer entries are whole caption dumps (style-oriart: "ori,dark purple sky,westland with..."): as ideas they
                             # drag every image towards the same scene. They stay usable as typed `__name__` tokens.
@@ -213,11 +214,14 @@ def doc_text(l: WildList) -> str:
 
 def choose(lists: list[WildList], query: str, given_text: str, config: Config, rng: random.Random,
            picks: list[tuple[str, str]] | None = None, related: list[tuple[WildList, float]] | None = None,
-           served: dict[str, dict[str, list[str]]] | None = None) -> list[Choice]:
+           served: dict[str, dict[str, list[str]]] | None = None, held_back: set[str] | None = None) -> list[Choice]:
     """Up to `ideas_per_prompt` lists for a brief (see the module doc). `picks` are the LLM's choices, [(list name, reason)], best first;
     `related` are the lists close in meaning to the brief, best first (planning/semantic.py; None when meaning search is off); `served` is
-    {list name: {slot: entries}} as read from the entries (see `served_by`)."""
+    {list name: {slot: entries}} as read from the entries (see `served_by`). `held_back` names the lists that never fill an open slot on
+    their own (the adult lists, offers.adult_content); without it, the lists with the ADULT_ROLE."""
     want = max(config.wildcards_ideas_per_prompt, 0)
+    if held_back is None:
+        held_back = {l.name for l in lists if l.role == ADULT_ROLE}
     usable = [l for l in lists if l.enabled and l.entries and (l.role != "artist" or wants_artists(query))]
     if not want or not usable:
         return []
@@ -250,7 +254,7 @@ def choose(lists: list[WildList], query: str, given_text: str, config: Config, r
     open_slots = [s for s in dict.fromkeys(config.wildcards_role_slots.get(r, "") for r in config.wildcards_slot_roles) if s and s not in given_slots]
     rng.shuffle(open_slots)
     for slot in open_slots:
-        pool = [l for l in usable if l.role != ADULT_ROLE and slot in served_by(l, served, config) and all(c.wild.name != l.name for c in chosen)]
+        pool = [l for l in usable if l.name not in held_back and slot in served_by(l, served, config) and all(c.wild.name != l.name for c in chosen)]
         if slot not in covered and pool:        # the best match; among equals a random one, larger (more general) lists more likely
             best = [l for l in pool if score[l.name] == max(score[x.name] for x in pool)]
             add(rng.choices(best, weights=[len(served_by(l, served, config)[slot]) for l in best])[0], "slot")

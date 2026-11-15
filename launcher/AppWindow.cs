@@ -96,6 +96,8 @@ namespace ComfyPlanner
         private bool _wasMaximized;     // maximized the last time it was not minimized
         private bool _placing;          // ignore DPI-change messages while we position the window ourselves
         private bool _quitting;
+        private bool _canSuspend;       // the window has been shown once, so hiding it may lower the WebView2's memory
+        private bool _lowMemory;        // hidden or minimized: the WebView2 is asked to use less memory (SetLowMemory)
         private bool _showingError;     // the "cannot reach the server" page is up
         private bool _allowDataPage;    // the next navigation is our own error page
 
@@ -466,6 +468,7 @@ namespace ComfyPlanner
             {
                 Show();
             }
+            _canSuspend = true; // from now on, hiding the window lowers the WebView2's memory (SetLowMemory)
             if (WindowState == FormWindowState.Minimized)
             {
                 ShowWindow(Handle, SW_RESTORE); // back to normal or maximized, whichever it was
@@ -553,8 +556,53 @@ namespace ComfyPlanner
             {
                 return;
             }
+            bool shown = Visible && WindowState != FormWindowState.Minimized;
             _controller.Bounds = ClientRectangle;
-            _controller.IsVisible = Visible && WindowState != FormWindowState.Minimized;
+            _controller.IsVisible = shown;
+            if (_canSuspend)
+            {
+                SetLowMemory(!shown); // before the first show the page is still loading: leave it alone
+            }
+        }
+
+        // While the window is hidden to the tray (or minimized) the page keeps its state (text in a field, the open
+        // tab...) but the WebView2 is told to use as little memory as it can: a low memory target, and suspended, which
+        // pauses the page's scripts and timers. Showing the window undoes both; the page then carries on and
+        // catches up (the live-event stream of the UI re-syncs by itself).
+        private async void SetLowMemory(bool low)
+        {
+            CoreWebView2 web = _web;
+            if (web == null || low == _lowMemory)
+            {
+                return;
+            }
+            _lowMemory = low;
+            try
+            {
+                if (low)
+                {
+                    web.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low;
+                    bool suspended = await web.TrySuspendAsync(); // only works while the WebView2 is not visible
+                    if (!_lowMemory && web.IsSuspended)
+                    {
+                        web.Resume(); // the window came back while it was still suspending
+                    }
+                    _log("window hidden: WebView2 memory target low" + (suspended ? ", page suspended" : ", page not suspended"));
+                }
+                else
+                {
+                    if (web.IsSuspended)
+                    {
+                        web.Resume();
+                    }
+                    web.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Normal;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Closed in the meantime, or an older WebView2 runtime without these calls: the page just stays as it was.
+                _log("WebView2 memory setting failed: " + ex.Message);
+            }
         }
 
         private void CloseWebView()

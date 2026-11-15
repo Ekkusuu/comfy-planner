@@ -1,6 +1,7 @@
 """Start and stop llama.cpp's `llama-server` (OpenAI-compatible API). One model is loaded at a time."""
 import asyncio
 import logging
+import re
 import subprocess
 import sys
 
@@ -15,10 +16,53 @@ class LlmServerError(Exception):
     """llama-server didn't start, or didn't stop."""
 
 
+# Memory flags, added when the llama-server build knows them (older builds refuse unknown flags).
+# Recent builds keep a cache of earlier prompts in system RAM (--cache-ram, 8 GiB by default; about 1 GiB per long prompt)
+# and context checkpoints per slot. The planner never sends the same long prompt again after other ones, and retries reuse
+# the slot's own context, so both caches only cost memory: measured on a 12B model, 17.7 GB of RAM fell to 8.9 GB with them
+# off, at the same speed.
+MEMORY_FLAGS = (("--cache-ram", "0"), ("--ctx-checkpoints", "0"))
+
+_help_text: dict[tuple[str, float], str] = {}       # llama-server --help output by (binary, modified time)
+
+
+async def help_text(binary) -> str:
+    """The binary's --help output ('' if it cannot be read). Asked once per binary file."""
+    try:
+        key = (str(binary), binary.stat().st_mtime)
+    except OSError:
+        return ""
+    if key not in _help_text:
+        kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+        try:
+            proc = await asyncio.create_subprocess_exec(str(binary), "--help", stdin=asyncio.subprocess.DEVNULL,
+                                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, **kwargs)
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                out = b""
+        except OSError:
+            out = b""
+        _help_text[key] = out.decode("utf-8", "replace")
+    return _help_text[key]
+
+
+def memory_flags(help_output: str, extra_args: list[str]) -> list[str]:
+    """MEMORY_FLAGS that this build lists in its help, minus any the user already sets in the extra arguments."""
+    flags = []
+    for name, value in MEMORY_FLAGS:
+        if re.search(rf"(^|[\s,]){re.escape(name)}([\s,=]|$)", help_output, re.M) and name not in extra_args:
+            flags += [name, value]
+    return flags
+
+
 class LlamaServer:
     def __init__(self, config: Config):
         self.config = config
         self.proc: asyncio.subprocess.Process | None = None
+        self.memory_flags: list[str] = []          # set by start() from the binary's --help
 
     @property
     def url(self) -> str:
@@ -33,7 +77,7 @@ class LlamaServer:
         return [str(c.llm_binary), "--model", str(c.llm_model_path), "--host", c.llm_host, "--port", str(c.llm_port),
                 "--ctx-size", str(c.llm_ctx_size), "--n-gpu-layers", str(c.llm_gpu_layers), "--jinja",
                 # one slot: the app makes one call at a time, and extra slots cost about 1 GB of VRAM
-                "--parallel", "1", *c.llm_extra_args]
+                "--parallel", "1", *self.memory_flags, *c.llm_extra_args]
 
     # ---------- start ----------
 
@@ -52,7 +96,8 @@ class LlamaServer:
             raise LlmServerError(f"LLM model file not found: {model}")
         if await self._answers():
             raise LlmServerError(f"Something is already answering on {self.url} (a leftover llama-server?). Stop it first.")
-        log.info("starting llama-server with %s", model.name)
+        self.memory_flags = memory_flags(await help_text(c.llm_binary), c.llm_extra_args)
+        log.info("starting llama-server with %s%s", model.name, f" ({' '.join(self.memory_flags)})" if self.memory_flags else "")
         kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
         self.proc = await asyncio.create_subprocess_exec(*self.command(), stdin=asyncio.subprocess.DEVNULL,
                                                          stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, **kwargs)

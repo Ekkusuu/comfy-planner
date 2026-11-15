@@ -11,6 +11,8 @@ cli = "comfy"                  # command used by "Start ComfyUI"
 host = "127.0.0.1"
 port = 8765
 data_dir = "data"
+update_repo = "Ekkusuu/comfy-planner"   # GitHub repository (owner/name) the "Check for updates" button asks for the latest release; "" turns checking off
+check_updates_at_start = false          # true: check once each time the app opens. Off by default: nothing is sent unless you press the button
 
 [jobs]
 max_images_per_job = 16

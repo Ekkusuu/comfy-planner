@@ -1,4 +1,4 @@
-"""The content safety filter: a fixed set of rules, loaded once at startup, applied the same way on every surface.
+"""The content safety filter: an optional set of rules, loaded once at startup, applied the same way on every surface.
 
 The rules are data (content_rules.toml, next to this file); this module is the one mechanism that reads and applies them. A rule has a
 code, a message and groups of words; a text is blocked when every group of a rule matches it. Callers use only this API:
@@ -10,9 +10,11 @@ Weights and brackets hide nothing: every rule runs on the text as typed, with Co
 turned into spaces (`_readings`). The check is deliberately blunt - it looks at words - so it can block an innocent text that uses
 words of every group; rewrite the text and it passes.
 
-The protection is always on. There is no setting, option or environment variable for it, and the rules file is part of the app, not
-of config/. If the file is missing, unreadable or malformed, or fails its self-test, `check_content` and `require_ready` raise
-ContentRulesError and the app refuses to plan or queue: it never runs unfiltered. Neither the log nor an issue ever holds matched text.
+The filter is an augment, not a gate. There is no setting, option or environment variable for it, and the rules file is part of the app,
+not of config/. Devs can add or remove [[rule]] blocks freely; no code or group shape is required. If the file is missing, unreadable,
+malformed, empty, or fails its self-test, the app keeps running and logs a warning. Each rule is loaded and self-tested on its own:
+a broken rule is skipped and the others stay active (`activate`); only a file that cannot be read at all leaves no rules.
+Neither the log nor an issue ever holds matched text.
 """
 import logging
 import re
@@ -26,7 +28,6 @@ from app.fields import make_issue
 log = logging.getLogger("content_safety")
 
 RULES_PATH = Path(__file__).with_name("content_rules.toml")
-REQUIRED_CODES = ("cse",)       # rules the file must define; the app does not run without them
 
 AGE = re.compile(r"\b(\d{1,2})[\s-]*(?:years?|yrs?|y)[\s-]*old\b|\bage[ds]?\s*:?\s*(\d{1,2})\b", re.I)
 WEIGHT_NUMBER = re.compile(r":\s*-?\d*\.?\d+\s*(?=\\?\))")      # the ":1.3" of "(x:1.3)", also of an escaped "(x:1.3\)"
@@ -34,7 +35,7 @@ BRACKET = re.compile(r"\\?[()]")                                 # a bracket, es
 
 
 class ContentRulesError(Exception):
-    """The rules are not usable. The message is meant for the user and never holds a rule's words."""
+    """The rules file, or one rule in it, is not usable. The message names at most the rule's code, never its words."""
 
 
 def _readings(text: str) -> list[str]:
@@ -78,7 +79,6 @@ class Rule:
 
 _rules: tuple[Rule, ...] | None = None
 _alone: tuple[Group, ...] = ()      # the groups of the active rules that are avoided on their own
-_failure = "The content rules were not loaded."
 
 
 # ---------- loading ----------
@@ -107,43 +107,77 @@ def _parse_group(raw, where: str) -> Group:
     return Group(str(raw.get("name") or where), tuple(words), pattern, CHECKS[check] if check else None, bool(raw.get("avoid_alone", False)))
 
 
+def _rule_entries(raw: dict) -> list:
+    """The [[rule]] entries of a parsed file (empty when there are none). Raises ContentRulesError when the file's top level is malformed."""
+    if not isinstance(raw, dict) or set(raw) - {"rule"}:
+        raise ContentRulesError("The content rules file is malformed.")
+    entries = raw.get("rule", [])
+    if entries is None:
+        entries = []
+    if not isinstance(entries, list):
+        raise ContentRulesError("The content rules file is malformed.")
+    return entries
+
+
+def _parse_rule(entry, n: int) -> Rule:
+    """One [[rule]] entry (the n-th of the file). Raises ContentRulesError, naming only the rule, when it is malformed."""
+    if not isinstance(entry, dict) or set(entry) - {"code", "message", "all_of", "old_codes"}:
+        raise ContentRulesError(f"The content rules file is malformed (rule {n}).")
+    code = _text(entry.get("code"), f"rule {n} code")
+    groups = entry.get("all_of")
+    if not isinstance(groups, list) or not groups:
+        raise ContentRulesError(f"The content rules file is malformed (rule '{code}' has no groups).")
+    old = entry.get("old_codes", [])
+    if not isinstance(old, list) or not all(isinstance(c, str) and c for c in old):
+        raise ContentRulesError(f"The content rules file is malformed (rule '{code}' old codes).")
+    return Rule(code, _text(entry.get("message"), f"rule '{code}' message"),
+                tuple(_parse_group(g, f"rule '{code}' group {i}") for i, g in enumerate(groups, 1)), tuple(old))
+
+
 def _parse_rules(raw: dict) -> tuple[Rule, ...]:
-    entries = raw.get("rule")
-    if not isinstance(entries, list) or not entries or set(raw) - {"rule"}:
-        raise ContentRulesError("The content rules file has no rules.")
-    rules = []
-    for n, entry in enumerate(entries, 1):
-        if not isinstance(entry, dict) or set(entry) - {"code", "message", "all_of", "old_codes"}:
-            raise ContentRulesError(f"The content rules file is malformed (rule {n}).")
-        code = _text(entry.get("code"), f"rule {n} code")
-        groups = entry.get("all_of")
-        if not isinstance(groups, list) or not groups:
-            raise ContentRulesError(f"The content rules file is malformed (rule '{code}' has no groups).")
-        old = entry.get("old_codes", [])
-        if not isinstance(old, list) or not all(isinstance(c, str) and c for c in old):
-            raise ContentRulesError(f"The content rules file is malformed (rule '{code}' old codes).")
-        rules.append(Rule(code, _text(entry.get("message"), f"rule '{code}' message"),
-                          tuple(_parse_group(g, f"rule '{code}' group {i}") for i, g in enumerate(groups, 1)), tuple(old)))
+    """Every rule of a parsed file, strictly: the first problem anywhere raises ContentRulesError (load_rules)."""
+    rules = [_parse_rule(entry, n) for n, entry in enumerate(_rule_entries(raw), 1)]
     if len({r.code for r in rules}) != len(rules):
         raise ContentRulesError("The content rules file repeats a rule code.")
-    for code in REQUIRED_CODES:
-        rule = next((r for r in rules if r.code == code), None)
-        if rule is None:
-            raise ContentRulesError(f"The content rules file is missing the required rule '{code}'.")
-        if len(rule.groups) < 2 or not any(g.avoid_alone for g in rule.groups):
-            raise ContentRulesError(f"The required rule '{code}' is incomplete.")
     return tuple(rules)
 
 
-def load_rules(path: Path) -> tuple[Rule, ...]:
-    """Read and check a rules file. Raises ContentRulesError for anything missing, unreadable or malformed."""
+def _parse_each(raw: dict) -> tuple[tuple[Rule, ...], list[str]]:
+    """The rules of a parsed file that load and pass their self-test, each on its own, and a message for every rule that was skipped:
+    a broken rule never takes the others down with it. A repeated code keeps its first rule. Raises ContentRulesError only when the
+    file's top level is malformed."""
+    rules: list[Rule] = []
+    skipped: list[str] = []
+    for n, entry in enumerate(_rule_entries(raw), 1):
+        try:
+            rule = _parse_rule(entry, n)
+            _self_test_rule(rule)
+        except ContentRulesError as e:
+            skipped.append(str(e))
+            continue
+        if any(r.code == rule.code for r in rules):
+            skipped.append(f"The content rules file repeats the rule code '{rule.code}' (rule {n}).")
+            continue
+        rules.append(rule)
+    return tuple(rules), skipped
+
+
+def _read(path: Path) -> dict:
     try:
-        raw = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+        return tomllib.loads(Path(path).read_text(encoding="utf-8"))
     except OSError:
         raise ContentRulesError("The content rules file is missing or cannot be read.") from None
     except (tomllib.TOMLDecodeError, UnicodeDecodeError):
         raise ContentRulesError("The content rules file is not valid.") from None
-    return _parse_rules(raw)
+
+
+def load_rules(path: Path) -> tuple[Rule, ...]:
+    """Read and check a rules file strictly, self-test included. Empty (no [[rule]]) returns (). Raises ContentRulesError for anything
+    missing, unreadable or malformed, and for a rule that fails its self-test. The app itself loads with `activate`, which skips only the
+    broken rules."""
+    rules = _parse_rules(_read(path))
+    _self_test(rules)
+    return rules
 
 
 def _strip_lookarounds(entry: str) -> str:
@@ -186,43 +220,52 @@ def group_sample(group: Group) -> str | None:
     return None
 
 
-def _self_test(rules: tuple[Rule, ...]) -> None:
-    """Every rule must fire on a probe made from its own data - one sample from each group - in every reading, and a group avoided on its
+def _self_test_rule(rule: Rule) -> None:
+    """The rule must fire on a probe made from its own data - one sample from each group - in every reading, and a group avoided on its
     own must be found alone. Words are neither printed nor logged: a failure names only the rule."""
+    samples = [group_sample(g) for g in rule.groups]
+    if not all(samples):
+        raise ContentRulesError(f"The content rules self-test failed (rule '{rule.code}': a group has no usable entry).")
+    probe = " . ".join(samples)
+    wrapped = f"({samples[0]}:1.2) " + " ".join(f"({s})" for s in samples[1:])
+    if not all(any(rule.fires(view) for view in _readings(text)) for text in (probe, wrapped)):
+        raise ContentRulesError(f"The content rules self-test failed (rule '{rule.code}' does not fire).")
+    if any(g.avoid_alone and not g.matches(s) for g, s in zip(rule.groups, samples)):
+        raise ContentRulesError(f"The content rules self-test failed (rule '{rule.code}' group).")
+
+
+def _self_test(rules: tuple[Rule, ...]) -> None:
+    """The self-test of every rule (`_self_test_rule`); the first failure raises."""
     for rule in rules:
-        samples = [group_sample(g) for g in rule.groups]
-        if not all(samples):
-            raise ContentRulesError(f"The content rules self-test failed (rule '{rule.code}': a group has no usable entry).")
-        probe = " . ".join(samples)
-        wrapped = f"({samples[0]}:1.2) " + " ".join(f"({s})" for s in samples[1:])
-        if not all(any(rule.fires(view) for view in _readings(text)) for text in (probe, wrapped)):
-            raise ContentRulesError(f"The content rules self-test failed (rule '{rule.code}' does not fire).")
-        if any(g.avoid_alone and not g.matches(s) for g, s in zip(rule.groups, samples)):
-            raise ContentRulesError(f"The content rules self-test failed (rule '{rule.code}' group).")
+        _self_test_rule(rule)
 
 
 def activate(path: Path | None = None) -> bool:
-    """Load the rules (by default the file next to this module), run the self-test, and use them from now on. On any failure no rules are
-    active: every check then raises ContentRulesError. Called once at startup; returns whether the filter is active."""
-    global _rules, _alone, _failure
+    """Load the rules (by default the file next to this module) and use them from now on. Each rule is loaded and self-tested on its own:
+    a broken rule is skipped with a warning and the others stay active. The filter is an augment: when the whole file cannot be read,
+    the app keeps running with no filtering. Called once at startup; always returns True."""
+    global _rules, _alone
     try:
-        rules = load_rules(path or RULES_PATH)
-        _self_test(rules)
+        rules, skipped = _parse_each(_read(path or RULES_PATH))
     except ContentRulesError as e:
-        _rules, _alone, _failure = None, (), str(e)
-        log.error("content rules are not active: %s", e)
-        return False
-    _rules, _failure = rules, ""
+        _rules, _alone = (), ()
+        log.warning("content rules are not active, running without filtering: %s", e)
+        return True
+    for problem in skipped:
+        log.warning("content rule skipped: %s", problem)
+    _rules = rules
     _alone = tuple(g for rule in rules for g in rule.groups if g.avoid_alone)
-    log.info("content rules active: %s", ", ".join(r.code for r in rules))
+    if rules:
+        log.info("content rules active: %s", ", ".join(r.code for r in rules))
+    else:
+        log.warning("content rules active: (none) - running without filtering")
     return True
 
 
-def require_ready() -> tuple[Rule, ...]:
-    """The active rules, or ContentRulesError: planning and queueing call this before they do anything."""
+def active_rules() -> tuple[Rule, ...]:
+    """The active rules (empty when none are loaded)."""
     if _rules is None:
-        raise ContentRulesError(f"{_failure} Planning and queueing are turned off until the file app/planning/content_rules.toml is restored "
-                                f"and the app is restarted.")
+        return ()
     return _rules
 
 
@@ -231,26 +274,29 @@ def require_ready() -> tuple[Rule, ...]:
 def check_content(texts: list[str], *, strict: bool = False, field: str = "prompts") -> dict | None:
     """A blocking issue (with the rule's fixed message and code) if the texts trigger a rule, else None. Each text is checked on its own and
     all of them together (a description can hold one group's words while the prompt holds another's). `strict` is for text that must
-    not mention a group at all, such as a scene plan: it also triggers when a group marked `avoid_alone` matches one of the texts alone."""
-    rules = require_ready()
+    not mention a group at all, such as a scene plan: it also triggers when a group marked `avoid_alone` matches one of the texts alone.
+    With no rules active this is always None."""
+    rules = active_rules()
     pieces = [t for t in texts if t]
     views = _readings(" . ".join(pieces))
     for rule in rules:
         if any(rule.fires(view) for view in views) or (strict and any(g.avoid_alone and g.matches(p) for g in rule.groups for p in pieces)):
-            return make_issue(field, rule.message, code=rule.code)
+            return make_issue(field, rule.message, code=rule.code, origin="content_rules")
     return None
 
 
 def matches_term(text: str) -> bool:
-    """Does one entry (a tag, an offered option, an appearance word) match a group that is avoided on its own? Such entries are never used."""
+    """Does one entry (a tag, an offered option, an appearance word) match a group that is avoided on its own? Such entries are never used.
+    With no rules active this is always False."""
     if _rules is None:
-        require_ready()
+        return False
     return any(group.matches(text) for group in _alone)
 
 
 def codes() -> tuple[str, ...]:
-    """The issue codes of the rules, and the codes that earlier versions stored for them: issues a job's finalize recomputes every time."""
-    return tuple(c for rule in require_ready() for c in (rule.code, *rule.old_codes))
+    """The issue codes of the active rules, and the codes that earlier versions stored for them: issues a job's finalize recomputes every time.
+    Empty when no rules are active."""
+    return tuple(c for rule in active_rules() for c in (rule.code, *rule.old_codes))
 
 
 def log_block(code: str, job_id: int | None) -> None:

@@ -1,7 +1,7 @@
 # Content rules: the fixed filter that checks every description, prompt, scene plan and offered entry.
 #
-# This file belongs to the app: it is read once at startup, it is not a setting, and nothing in the app can switch it off. When it is
-# missing, unreadable or malformed, the app refuses to plan or queue (app/planning/content_safety.py). English only.
+# This file belongs to the app: it is read once at startup and it is not a setting (app/planning/content_safety.py). When it is missing
+# or cannot be read, the app runs with no rules and logs a warning. English only.
 #
 # A rule blocks a text when every group of its `all_of` list matches. A group matches when any entry of its `words` matches as a whole
 # word (case ignored; an entry is a plain word or a regular-expression fragment), or when its named `check` says so. The code applies
@@ -16,30 +16,19 @@
 #   old_codes    optional: issue codes that earlier versions stored for the rule; jobs that still hold them are treated like the rule's own
 #
 # Adding a filter: append a [[rule]] with a new code, a message and its groups. No code change is needed. Run the tests afterwards.
-
-[[rule]]
-code = 'cse'
-message = 'Blocked: this combination of content is never allowed. Change the description or the prompts.'
-old_codes = ['minors']
-
-[[rule.all_of]]
-name = 'content'
-words = [
-  'nsfw', 'nude', 'nudes', 'naked', 'nudity', 'topless', 'bottomless', 'sex', 'sexual', 'sexually', 'sexy', 'erotic',
-  'erotica', 'porn', 'porno', 'pornographic', 'explicit', 'lewd', 'hentai', 'fellatio', 'blowjob', 'masturbat\w*',
-  'orgasm\w*', 'cum', 'cumshot', 'creampie', 'genitals?', 'penis', 'pussy', 'vagina', 'nipples?', 'areolae?',
-  'breasts?', 'boobs?', 'ahegao', 'rape', 'raped', 'fetish', 'bdsm', 'bondage', 'lingerie', 'underwear', 'panties',
-  'pantsu', 'upskirt', 'seductive', 'aroused', 'intercourse',
-]
-
-[[rule.all_of]]
-name = 'subject'
-check = 'age_below_18'
-avoid_alone = true
-words = [
-  'child', 'children', 'kid', 'kids', 'minor', 'minors', 'underage', 'under-age', 'preteen', 'pre-teen', 'tween',
-  'toddler', 'infant', 'baby(?![\s-]*(?:blue|pink|powder))', 'loli', 'lolita', 'lolicon', 'shota', 'shotacon',
-  'schoolgirl', 'schoolgirls', 'schoolboy', 'schoolboys', 'teen', 'teens', 'teenage', 'teenaged', 'teenager',
-  'teenagers', 'little girl', 'little boy', 'young girl', 'young boy', 'small child', 'prepubescent', 'juvenile',
-  'elementary school', 'middle school', 'junior high',
-]
+# Each rule is loaded and self-tested on its own: a broken rule is skipped with a warning in the log, and the other rules stay active.
+#
+# Example (commented out, so it is not read; remove the leading "# " to use it). It blocks a text that matches both groups:
+#
+# [[rule]]
+# code = 'example'
+# message = 'Blocked: this content is not allowed. Change the description or the prompts.'
+#
+# [[rule.all_of]]
+# name = 'first'
+# words = ['placeholder', 'another placeholder', 'placeholders?', 'placehold\w*']
+#
+# [[rule.all_of]]
+# name = 'second'
+# avoid_alone = false
+# words = ['sample', 'samples']

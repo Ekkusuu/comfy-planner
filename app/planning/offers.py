@@ -22,9 +22,11 @@ and what it "used" was whatever happened to match. Now:
     slot that falls well below the best list of that slot (camera models, photographers and lens gear in the camera slot, next to view and
     framing lists) is not offered for it (`fitting_lists`; not for a list whose role the user set). Among the entries of a slot, real tags of the tag library (Danbooru's own words:
     `from above`, `dutch angle`) rank a little higher than phrases that are not tags (`is_real_tag`).
-  * A picture rated nsfw or explicit is offered adult content: the entries of the whole library that are adult by meaning (content_level.py: entries whose
-    meaning is closer to nudity or sexual activity than to ordinary things) join the lists of the slot they belong to, and about half of what a slot offers is drawn from
-    them (`adult_pools`, `ADULT_SHARE`). Pictures rated lower get no such extra share; their offers are ranked like any others.
+  * Which entries are adult is read from their meaning (content_level.py: entries whose meaning is closer to nudity or sexual activity than to
+    ordinary things), whatever list or folder holds them (`adult_content`). A list the user set to the `nsfw` role is adult as a whole; the folder's
+    default role only counts when meaning cannot be told (no embeddings yet). A list whose entries are mostly adult never fills an open slot on its own.
+  * A picture rated below nsfw is offered no adult entries. A picture rated nsfw or explicit is offered adult content: the adult entries of the whole
+    library join the lists of the slot they belong to, and about half of what a slot offers is drawn from them (`adult_pools`, `ADULT_SHARE`).
   * A job whose LoRA sets the look (look.py) is offered no light or colour: the lighting slot is left out and no entry that holds a
     look tag (a colour scheme, `purple lighting`) is offered for any slot (`look`).
   * What counts as "used" is what is really in the scene plan, checked in code (`record`).
@@ -36,7 +38,7 @@ from dataclasses import dataclass, field, replace
 from statistics import fmean
 
 from app.embeddings import dot
-from app.planning.content_level import adult_entries, wants_adult
+from app.planning.content_level import adult_entries, judged, wants_adult
 from app.planning.context import PlanContext
 from app.planning.rank import Bm25
 from app.planning.content_safety import matches_term
@@ -55,6 +57,7 @@ TAG_BONUS = 0.05            # added to the rank of an entry that is a real tag o
 FIT_SAMPLE = 60             # entries of a list that are compared with the slot (an even sample of a longer list)
 FIT_TOP = 5                 # ... and a list's fit is the mean of its best this many
 ADULT_SHARE = 0.5           # the share of a slot's offers drawn from adult entries when the picture is nsfw or explicit and the slot has some
+ADULT_LIST_SHARE = 0.5      # a list at least this share of whose entries are adult is an adult list: it never fills an open slot on its own
 
 
 @dataclass
@@ -213,15 +216,18 @@ def offer_draw(entries: list[str], scores: list[float], size: int, rng: random.R
 
 
 async def slot_lists(ctx: PlanContext, picks: list, lists: list[WildList], skip_slots: set[str], need: set[str], query: str,
-                     sv: dict[str, Serving] | None = None) -> dict[str, list[WildList]]:
+                     sv: dict[str, Serving] | None = None, held_back: set[str] | None = None) -> dict[str, list[WildList]]:
     """{slot: the lists that serve it}. A list that serves a slot appears once in it, holding only the entries that feed that slot (at most
     PER_LIST_POOL of them, and at most MAX_LISTS_PER_SLOT lists per slot). The picked lists serve the slot the LLM named, else every slot
     their own entries fit (`sv`, serving.py; a list that fits none is a loose list under ""). For every slot in `need` (what the request wants
     different in every image) that has none, the lists serving it, the ones that fit the slot's topic best. Slots in `skip_slots` (the brief
-    already decides them) get nothing unless they are in `need`."""
+    already decides them) get nothing unless they are in `need`. The lists in `held_back` (adult lists, `adult_content`; without it, the
+    lists with the ADULT_ROLE) are not brought in for a slot in `need`."""
     c = ctx.config
     sv = sv if sv is not None else await served(ctx, lists)
     by_name = {l.name: l for l in lists}
+    if held_back is None:
+        held_back = {l.name for l in lists if l.role == ADULT_ROLE}
     catalog = Catalog(lists)
     out: dict[str, list[WildList]] = {}
 
@@ -249,7 +255,7 @@ async def slot_lists(ctx: PlanContext, picks: list, lists: list[WildList], skip_
     for slot in need:
         if not slot or out.get(slot):
             continue
-        pool = [(by_name[n], s.slots[slot]) for n, s in sv.items() if slot in s.slots and n in by_name and by_name[n].role != ADULT_ROLE]
+        pool = [(by_name[n], s.slots[slot]) for n, s in sv.items() if slot in s.slots and n in by_name and n not in held_back]
         about = c.wildcards_slot_about.get(slot, "")
         rated = []
         for l, entries in pool:
@@ -263,16 +269,51 @@ async def slot_lists(ctx: PlanContext, picks: list, lists: list[WildList], skip_
     return {s: ls[:MAX_LISTS_PER_SLOT] if s else ls for s, ls in out.items() if ls}
 
 
+@dataclass
+class AdultContent:
+    entries: set[str] = field(default_factory=set)      # the adult entries of the library
+    lists: set[str] = field(default_factory=set)        # the lists that are adult as a whole (most of their entries, or the user set the role)
+
+
+async def adult_content(ctx: PlanContext, lists: list[WildList]) -> AdultContent:
+    """Which entries and lists of the library are adult, read from the entries' meaning (content_level.py) wherever they are kept. A list
+    the user set to the ADULT_ROLE is their decision: all of it is adult. When meaning cannot be told (no embeddings, or the vectors are still
+    being computed) a list whose folder defaults to that role is taken as adult, the only hint left. Artist lists are names: never adult."""
+    plain = {l.name: plain_entries(l) for l in lists if l.role != "artist"}
+    every = [e for es in plain.values() for e in es]
+    out = AdultContent(entries=set(await adult_entries(ctx, every)))
+    told = usable(ctx) and judged(every)
+    for l in lists:
+        es = plain.get(l.name, [])
+        if l.role == ADULT_ROLE and (l.role_set or not told):
+            out.entries.update(es)
+            out.lists.add(l.name)
+        elif es and sum(e in out.entries for e in es) >= ADULT_LIST_SHARE * len(es):
+            out.lists.add(l.name)
+    return out
+
+
+def without(pools: dict[str, list[WildList]], held: set[str]) -> dict[str, list[WildList]]:
+    """The pools with the `held` entries taken out of every list (a list left empty is dropped, and a slot left empty)."""
+    out = {}
+    for slot, ls in pools.items():
+        kept = [replace(l, entries=[e for e in l.entries if e not in held]) for l in ls]
+        if kept := [l for l in kept if l.entries]:
+            out[slot] = kept
+    return out
+
+
 async def adult_pools(ctx: PlanContext, lists: list[WildList], pools: dict[str, list[WildList]], skip_slots: set[str], need: set[str],
-                      sv: dict[str, Serving] | None = None) -> set[str]:
+                      sv: dict[str, Serving] | None = None, adult: set[str] | None = None) -> set[str]:
     """Bring the adult content of the whole library into `pools` (changed in place) for a nsfw or explicit picture: a list that has adult entries
-    (by meaning) and is not in its slot's pool yet joins it with only those entries. The slot is the one each entry fits (serving.py); an adult
+    (`adult`, else by meaning) and is not in its slot's pool yet joins it with only those entries. The slot is the one each entry fits (serving.py); an adult
     entry that fits no slot goes to the slot the list's role maps to. A slot the brief already fixes gets nothing. Returns the adult entries."""
     c = ctx.config
     sv = sv if sv is not None else await served(ctx, lists)
     candidates = [l for l in lists if l.role != "artist"]
     plain = {l.name: plain_entries(l) for l in candidates}
-    adult = await adult_entries(ctx, [e for l in candidates for e in plain[l.name]])
+    if adult is None:
+        adult = await adult_entries(ctx, [e for l in candidates for e in plain[l.name]])
     for l in candidates:
         by_slot: dict[str, list[str]] = {}
         placed = set()
@@ -308,8 +349,9 @@ async def build(ctx: PlanContext, brief: str, given_text: str, picks: list, vary
     if not lists:
         return None
     sv = await served(ctx, lists)         # what each list serves, read from its entries
+    found = await adult_content(ctx, lists)         # which entries and lists are adult, read from the entries
     # the lists the rules choose (the LLM's picks, phrase and meaning matches, keyword matches, open slots), each once
-    chosen = choose(lists, brief, given_text, c, rng, [(p[0], p[1]) for p in picks], related, served_slots(sv))
+    chosen = choose(lists, brief, given_text, c, rng, [(p[0], p[1]) for p in picks], related, served_slots(sv), found.lists)
     pick_slots = {p[0]: (p[2] if len(p) > 2 else "") for p in picks}
     merged = [(ch.wild.name, ch.why, pick_slots.get(ch.wild.name, "")) for ch in chosen]
     given_slots = {c.wildcards_role_slots.get(r, "") for r in given_roles(given_text, lists, c, served_slots(sv))} - {""}
@@ -317,10 +359,12 @@ async def build(ctx: PlanContext, brief: str, given_text: str, picks: list, vary
         given_slots.add("lighting")         # the LoRA's look is not argued with: no lighting offers
     need = set(vary) - ({"lighting"} if look is not None else set())
     open_always = {s for s in c.wildcards_always_slots if s not in given_slots and s in c.wildcards_slot_about} if always else set()
-    pools = await slot_lists(ctx, merged, lists, given_slots, need | open_always, brief, sv)
+    pools = await slot_lists(ctx, merged, lists, given_slots, need | open_always, brief, sv, found.lists)
     adult: set[str] = set()
     if wants_adult(rating):
-        adult = await adult_pools(ctx, lists, pools, given_slots, need, sv)
+        adult = await adult_pools(ctx, lists, pools, given_slots, need, sv, found.entries)
+    else:         # a picture below nsfw is offered no adult entries, whichever list holds them
+        pools = without(pools, found.entries)
     if gaps is not None:
         gaps.extend(s for s in c.wildcards_always_slots if s in open_always and not pools.get(s))
     if not pools:

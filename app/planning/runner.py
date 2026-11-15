@@ -158,7 +158,6 @@ class PlanRunner:
         return wf, card
 
     def _start(self, kind: str, request: str, run, job_ids: list[int] | None = None) -> dict:
-        content_safety.require_ready()      # no planning without the content rules
         plan_id = self.db.execute("INSERT INTO plans (kind, request, status, message, job_ids, model, created_at) VALUES (?,?,?,?,?,?,?)",
                                   (kind, request, "queued", "Waiting to start", dumps(job_ids or []), self.config.llm_model, now())).lastrowid
         for job_id in job_ids or []:

@@ -7,7 +7,7 @@
         "rule": "overused-font",
         "value": "geist",
         "createdAt": "2026-10-29T09:13:07.728Z",
-        "reason": "design decision: the reference is Vercel/Raycast (PRODUCT.md); Geist is Vercel's own typeface"
+        "reason": "design decision: the reference is Vercel/Raycast; Geist is Vercel's own typeface"
       },
       {
         "rule": "overused-font",

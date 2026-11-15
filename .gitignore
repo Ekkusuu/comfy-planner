@@ -34,3 +34,6 @@ design/
 
 # Local instructions for coding agents
 AGENTS.md
+
+# Installer build output (scripts/build_release.ps1)
+dist/

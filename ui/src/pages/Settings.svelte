@@ -13,7 +13,7 @@
     'max_images_per_job', 'max_images_per_request', 'max_loras', 'hires_default', 'safety_negative', 'strip_from_default_negative',
     'llm_model', 'llm_models', 'llm_ctx_size', 'llm_binary', 'llm_gpu_layers', 'llm_enable_thinking', 'llm_temperature',
     'llm_max_tokens', 'llm_start_timeout', 'llm_stop_timeout', 'llm_extra_args',
-    'allow_draft_cards',
+    'allow_draft_cards', 'check_updates_at_start',
     'wildcards_enabled', 'wildcards_llm_picks_lists', 'wildcards_ideas_per_prompt', 'wildcards_entries_per_list', 'embeddings_enabled',
   ]
 
@@ -104,6 +104,19 @@
     copied = key
     clearTimeout(copiedTimer)
     copiedTimer = setTimeout(() => (copied = ''), 1600)
+  }
+  // About: the update check button. The result is {current, latest, newer, url, notes, checked_at} or {current, error}.
+  let checking = $state(false)
+  let update = $state(null)
+  async function checkUpdates() {
+    checking = true
+    try {
+      update = await api.updateCheck()
+    } catch (e) {
+      update = { error: e.message || 'The check failed.' }
+    } finally {
+      checking = false
+    }
   }
   const modelNames = $derived(d ? Object.keys(d.llm_models) : [])
   const chosen = $derived(server?.llm_models.find((m) => m.name === d?.llm_model))
@@ -376,6 +389,38 @@
         {#each launch as [k, v]}<dt>{k}</dt><dd class="mono">{v}</dd>{/each}
       </dl>
     </section>
+
+    <section class="stack" id="about">
+      <div class="gh"><h2>About</h2>
+        <p>To update, download the new installer and run it. Your settings and data are kept.</p></div>
+      <dl class="dl cfg">
+        <dt>Application</dt><dd>Comfy Planner</dd>
+        <dt>Version</dt><dd class="mono" data-testid="app-version">{server.version}</dd>
+        {#if server.project_url}<dt>Project page</dt><dd><a href={server.project_url} target="_blank" rel="noopener noreferrer">{server.project_url.replace('https://', '')}</a></dd>{/if}
+      </dl>
+      <div class="card">
+        <SettingRow label="Updates" id="s-upd"
+          tip="Asks GitHub for the latest release of the project and compares it with this version. It sends one anonymous request and nothing else, and only when you press the button.">
+          <button class="btn" id="s-upd" onclick={checkUpdates} disabled={checking || !server.update_repo}><Icon name={checking ? 'loader' : 'retry'} />Check for updates</button>
+          {#if !server.update_repo}
+            <p class="upd">Update checking is turned off (update_repo is empty in config/app.toml).</p>
+          {:else if update?.error}
+            <p class="upd err" role="status">{update.error}</p>
+          {:else if update?.newer}
+            <p class="upd" role="status">Version {update.latest} is available. <a href={update.url} target="_blank" rel="noopener noreferrer">Open the release page</a></p>
+            {#if update.notes}<p class="notes">{update.notes}</p>{/if}
+          {:else if update}
+            <p class="upd" role="status">You have the latest version ({update.current}).</p>
+          {/if}
+        </SettingRow>
+        <SettingRow label="Check when the app opens" id="s-updstart" changed={isNew('check_updates_at_start')} error={err('check_updates_at_start')}
+          hint={d.check_updates_at_start ? 'On. The app asks GitHub once each time it opens.' : 'Off. Nothing is sent unless you press the button.'}
+          tip="When on, the app checks for a newer version once after it opens and shows a small notice if there is one. Off by default, so the app contacts nothing unless you ask.">
+          <button class="switch" id="s-updstart" role="switch" aria-checked={d.check_updates_at_start} aria-label="Check for updates when the app opens" onclick={() => (d.check_updates_at_start = !d.check_updates_at_start)}></button>
+        </SettingRow>
+      </div>
+      <p class="limits">First start on this computer, or something not working? <a href="#/setup">Run setup again</a>.</p>
+    </section>
   {/if}
 
   {#if dirty.length || bad.length}
@@ -414,6 +459,11 @@
   .code pre { flex: 1; min-width: 0; margin: 0; padding: 4px 0; line-height: 20px; color: var(--text-soft); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
   .code .icon-btn.done { color: var(--mint); }
   .limits { color: var(--muted); font-size: 12.5px; line-height: 1.45; max-width: 64ch; }
+  .limits a, .dl.cfg dd a, .upd a { color: var(--text-soft); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+  .limits a:hover, .dl.cfg dd a:hover, .upd a:hover { text-decoration-color: var(--text-soft); }
+  .upd { font-size: 12.5px; line-height: 1.45; max-width: 60ch; color: var(--muted); }
+  .upd.err { color: var(--red); }
+  .notes { max-width: 60ch; max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
   .files { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; align-items: center; width: 100%; }
   .fname { color: var(--muted); }
   .found { display: inline-flex; align-items: center; gap: 8px; height: 32px; color: var(--text-soft); }

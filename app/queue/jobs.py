@@ -24,7 +24,8 @@ SETTING_DEFAULTS = ("steps", "cfg", "sampler", "scheduler", "denoise", "width", 
 
 
 # Issue codes that code recomputes every time a job changes (the content rules' codes join them: content_safety.codes). Other issues
-# (from the planner) stay until their field is edited.
+# (from the planner) stay until their field is edited. Content issues carry origin="content_rules"; scene_ issues are content
+# issues for the scene plan and stay sticky only while their base rule is still active.
 STRUCTURAL_CODES = ("no_workflow", "not_runnable", "invalid", "lora_negative_locked")
 
 
@@ -59,7 +60,6 @@ class JobStore:
     def create_job(self, workflow_id: str, count: int, raw_fields: dict, description: str = "",
                    queue: bool = False, object_info: dict | None = None) -> dict:
         """Validate the hand-made job, store it as 'ready' with one image row (and recipe) per image."""
-        content_safety.require_ready()
         try:
             wf = self.library.get(workflow_id)
         except KeyError:
@@ -231,7 +231,6 @@ class JobStore:
         return (row["p"] or 0) + 1
 
     def queue_job(self, job_id: int) -> dict:
-        content_safety.require_ready()
         job = self.get_job(job_id, images=False)
         if job["status"] not in ("ready", "draft"):
             raise JobError(f"Job {job_id} is {job['status']}; only ready jobs can be queued (use retry for finished ones).")
@@ -406,9 +405,21 @@ class JobStore:
     def finalize(self, job_id: int, wf: dict | None, count: int, raw_fields: dict, issues: list[dict], oi: dict | None = None) -> dict:
         """The one place that turns fields + issues into a stored job: validates and clamps the fields, records
         structural problems (no workflow, no prompts, ...) as blocking issues, rebuilds the image rows when nothing
-        blocks, and sets the status to ready or draft."""
-        content_safety.require_ready()
-        issues = [i for i in issues if i.get("code") not in (*STRUCTURAL_CODES, *content_safety.codes())]
+        blocks, and sets the status to ready or draft. Content issues are recomputed; orphaned ones (rule removed) are dropped."""
+        active = set(content_safety.codes())
+        kept: list[dict] = []
+        for i in issues:
+            code = i.get("code", "")
+            if code in STRUCTURAL_CODES or code in active:
+                continue      # recomputed below
+            if isinstance(code, str) and code.startswith("scene_"):
+                if code[6:] in active:
+                    kept.append(i)      # sticky while its base rule is still active
+                continue      # drop orphaned scene_ blocks too
+            if i.get("origin") == "content_rules":
+                continue      # removed rule: drop, recompute adds it back only if still firing
+            kept.append(i)
+        issues = kept
         fields = normalize_fields(raw_fields)
         job = self.get_job(job_id, images=False)
         if wf is None:

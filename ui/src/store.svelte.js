@@ -4,7 +4,7 @@ import { api } from './api.js'
 // ---------- routing (hash) ----------
 export const route = $state({ name: 'plan', arg: null, query: {} })
 
-const titles = { plan: 'Plan', queue: 'Queue', gallery: 'Gallery', library: 'Library', how: 'How it works', settings: 'Settings' }
+const titles = { plan: 'Plan', queue: 'Queue', gallery: 'Gallery', library: 'Library', how: 'How it works', settings: 'Settings', setup: 'Set up' }
 function parseHash() {
   const [path, qs = ''] = location.hash.replace(/^#\/?/, '').split('?')
   const [name, arg] = path.split('/')
@@ -212,19 +212,49 @@ export function connect() {
     } catch {}
   }
   // EventSource reconnects by itself; re-sync everything once it does.
-  source.onopen = () => {
-    refreshJobs()
-    refreshImages()
-    refreshHealth()
-    refreshCardBuilds()
-    refreshPlans()
+  source.onopen = resync
+  // The app window suspends this page while it is hidden in the tray, so events can be missed: re-sync when it is shown.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) resync()
+  })
+}
+
+function resync() {
+  refreshJobs()
+  refreshImages()
+  refreshHealth()
+  refreshCardBuilds()
+  refreshPlans()
+}
+
+// ---------- first-run setup ----------
+// Skipping or finishing the setup page is remembered for this session only (until the app window is closed).
+const SETUP_DISMISSED = 'cp.setup.dismissed'
+export const setupDismissed = () => {
+  try {
+    return sessionStorage.getItem(SETUP_DISMISSED) === '1'
+  } catch {
+    return false
   }
+}
+export function dismissSetup() {
+  try {
+    sessionStorage.setItem(SETUP_DISMISSED, '1')
+  } catch {}
+}
+/** At start: open the setup page when something the app can't work without is missing (unless it was skipped this session). */
+async function checkSetup() {
+  if (setupDismissed() || route.name === 'setup') return
+  try {
+    if ((await api.setupStatus()).needs_setup) go('setup')
+  } catch {}
 }
 
 export async function boot() {
   connect()
   await Promise.all([refreshHealth(), refreshJobs(), refreshImages(), refreshWorkflows(), refreshOptions(), refreshConfig(), refreshCardBuilds(), refreshPlans(), refreshWorkflowCards()])
   live.ready = true
+  checkSetup()
   refreshLoras() // covers on the job cards; not waited for, the first scan can take a while
   setInterval(refreshHealth, 6000)
   // options need ComfyUI; pick them up once it comes back

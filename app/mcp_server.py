@@ -66,6 +66,7 @@ PROGRAM_SETTINGS = {
     "comfy_cli": "it is the command the app runs to start ComfyUI",
     "comfy_install_dir": "the app starts the Python program found in this folder when it starts ComfyUI",
     "comfy_url": "it decides which server receives the prompts and pictures, so moving it elsewhere would send them off this computer",
+    "check_updates_at_start": "turning it on makes the app contact GitHub every time it starts, which only the user decides",
 }
 SECRET_NAME = re.compile(r"token|secret|password|passwd|api[_-]?key|credential", re.I)   # a setting with such a name is never shown or changed
 HIDDEN_VALUES = ("llm_extra_args",)     # may hold an option such as --api-key, so the value is not shown
@@ -447,7 +448,7 @@ def register_tools(server: MCPServer, api: AgentApi):
 
     @tool(annotations=READ)
     async def get_status() -> dict:
-        """Check that Comfy Planner can make images right now. Returns whether ComfyUI is reachable, whether the queue is paused,
+        """Check that Comfy Planner can make images right now. Returns the app version, whether ComfyUI is reachable, whether the queue is paused,
         the image being generated, the jobs waiting, and the plans still being worked out. Call it first in a session and again
         whenever something seems stuck; `problems` says what to do (start_comfyui when ComfyUI is not reachable, resume_queue
         when the queue is paused)."""
@@ -462,7 +463,8 @@ def register_tools(server: MCPServer, api: AgentApi):
             problems.append("ComfyUI is not reachable: call start_comfyui, then get_status again in about 30 seconds.")
         if state["paused"]:
             problems.append("The queue is paused: call resume_queue.")
-        return {"comfyui": {"reachable": comfy["reachable"], "version": comfy["version"], "url": public_url(comfy["url"]), "error": comfy["error"]},
+        return {"app_version": health["version"],
+                "comfyui": {"reachable": comfy["reachable"], "version": comfy["version"], "url": public_url(comfy["url"]), "error": comfy["error"]},
                 "queue": {"paused": state["paused"], "held_for_planning": state["held"],
                           "running": job_summary(running, api.progress.get(running["id"])) if running else None,
                           "waiting": len(waiting), "waiting_jobs": [job_summary(j) for j in waiting[:10]]},
@@ -733,7 +735,8 @@ def register_tools(server: MCPServer, api: AgentApi):
         view = await api.get("/api/config")
         return {"settings": shown_settings(view),
                 "cannot_change": {**{name: f"stays in the app's Settings page: {why}" for name, why in PROGRAM_SETTINGS.items()},
-                                  "host, port, data_dir": "set when the app is started"}}
+                                  "host, port, data_dir": "set when the app is started",
+                                  "update_repo": "set in config/app.toml (it is the GitHub repository the update check asks)"}}
 
     @tool(annotations=OVERWRITE)
     async def update_settings(changes: dict) -> dict:
@@ -744,7 +747,8 @@ def register_tools(server: MCPServer, api: AgentApi):
         changes: setting name to new value, with the names and types get_settings shows, for example {"max_loras": 2,
         "hires_default": true, "allow_draft_cards": false}. A list setting is replaced as a whole.
         Refused, and left to the app's Settings page: settings that name a program to run or add to a command line (llm_binary,
-        llm_extra_args, comfy_cli, comfy_install_dir), the address of ComfyUI (comfy_url), host, port and data_dir, and anything that is a secret. A setting that was
+        llm_extra_args, comfy_cli, comfy_install_dir), the address of ComfyUI (comfy_url), the update check at start
+        (check_updates_at_start), host, port and data_dir, and anything that is a secret. A setting that was
         overwritten is not kept anywhere: read the old value with get_settings first if you may need it again. Returns what changed."""
         if not changes:
             raise ToolError("Give at least one setting to change.")

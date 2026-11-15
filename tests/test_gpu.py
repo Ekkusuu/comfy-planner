@@ -79,6 +79,30 @@ async def test_server_start_timeout_stops_the_process(llm_config):
     assert not server.running
 
 
+def test_memory_flags_only_when_the_build_knows_them_and_the_user_has_not_set_them():
+    from app.llm.server import memory_flags
+    new_build = "-cram, --cache-ram N   max prompt cache size\n-ctxcp, --ctx-checkpoints N  max checkpoints per slot\n"
+    assert memory_flags(new_build, []) == ["--cache-ram", "0", "--ctx-checkpoints", "0"]
+    assert memory_flags(new_build, ["--cache-ram", "512"]) == ["--ctx-checkpoints", "0"]      # the user's own value wins
+    assert memory_flags("--ctx-size N\n--parallel N\n", []) == []                               # an older build: none
+    assert memory_flags("", []) == []                                                            # help not readable: none
+    assert memory_flags("--cache-ram-extra N\n", []) == []                                      # only the exact flag name
+
+
+async def test_the_start_command_carries_the_memory_flags_the_binary_supports(llm_config, monkeypatch):
+    import app.llm.server as srv
+    async def fake_help(binary):
+        return "--cache-ram N\n--ctx-checkpoints N\n"
+    monkeypatch.setattr(srv, "help_text", fake_help)
+    server = FakeScriptServer(llm_config)
+    await server.start()
+    try:
+        assert server.memory_flags == ["--cache-ram", "0", "--ctx-checkpoints", "0"]
+        assert LlamaServer.command(server)[-4:] == ["--cache-ram", "0", "--ctx-checkpoints", "0"]
+    finally:
+        await server.stop()
+
+
 def test_server_command_uses_config(llm_config):
     cmd = LlamaServer(llm_config).command()
     assert cmd[cmd.index("--port") + 1] == str(llm_config.llm_port) and "--jinja" in cmd

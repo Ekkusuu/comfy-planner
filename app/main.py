@@ -24,6 +24,7 @@ from app.delete_routes import register_delete_routes
 from app.mcp_server import mount_mcp, serve_mcp
 from app.plan_routes import register_plan_routes
 from app.wildcard_routes import register_wildcard_routes
+from app.setup.routes import make_setup_manager, register_setup_routes
 from app import settings
 from app.config import CONFIG_PATH, ROOT, Config, load_config, slot_entry_texts
 from app.db import Database
@@ -52,6 +53,8 @@ from app.queue.groups import Groups
 from app.queue.jobs import ImageBusy, JobError, JobStore
 from app.queue.worker import QueueWorker
 from app.thumbs import DEFAULT_SIZE, clamp_size, ensure_thumb
+from app.updates import UpdateChecker, project_url
+from app.version import __version__
 from app.wildcards.store import WildcardStore
 
 
@@ -96,7 +99,7 @@ class UiFiles(StaticFiles):
 
 def create_app(config: Config | None = None, comfy=None, start_worker: bool = True, llm_server=None,
                llm_transport=None, civitai_transport=None, config_path: Path = CONFIG_PATH, embedding_server=None,
-               embedding_transport=None, rerank_server=None, rerank_transport=None) -> FastAPI:
+               embedding_transport=None, rerank_server=None, rerank_transport=None, update_transport=None) -> FastAPI:
     """Build the app. Tests pass a fake `comfy` client, start_worker=False, a fake llm_server, fake HTTP transports and a
     config_path in a temp folder."""
     config = config or load_config()
@@ -105,7 +108,7 @@ def create_app(config: Config | None = None, comfy=None, start_worker: bool = Tr
     async def lifespan(app: FastAPI):
         config.data_dir.mkdir(parents=True, exist_ok=True)
         setup_logging(config.data_dir / "logs")
-        content_safety.activate()       # the always-on content rules; if they fail to load, planning and queueing refuse (ContentRulesError)
+        content_safety.activate()       # load the content rules (a broken rule is skipped; see content_safety.py)
         logging.getLogger("app").info("Comfy Planner started (LLM: %s, ComfyUI: %s)", config.llm_model, config.comfy_url)
         app.state.config = config
         app.state.config_path = config_path
@@ -124,6 +127,7 @@ def create_app(config: Config | None = None, comfy=None, start_worker: bool = Tr
         app.state.lease = GpuLease(app.state.worker, app.state.comfy, app.state.llm_server)
         app.state.scanner = LoraScanner(app.state.db, config, app.state.comfy)
         app.state.civitai = CivitaiClient(config.cache_dir, transport=civitai_transport)
+        app.state.updates = UpdateChecker(update_transport)
         app.state.extras = LoraExtras(app.state.db)
         app.state.covers = LoraCovers(app.state.db, config, app.state.scanner, app.state.civitai, app.state.extras, app.state.events,
                                       background=start_worker)
@@ -133,6 +137,7 @@ def create_app(config: Config | None = None, comfy=None, start_worker: bool = Tr
                                         app.state.llm, app.state.lease, app.state.comfy, app.state.events, config)
         app.state.embedder = Embedder(config, embedding_server, embedding_transport)
         app.state.reranker = Reranker(config, rerank_server, rerank_transport)
+        app.state.setup = make_setup_manager(app)       # first-run setup: the install job (app/setup)
         app.state.planner = PlanRunner(PlanContext(config, app.state.llm, app.state.library, app.state.cards, app.state.db, wildcards=app.state.wildcards,
                                                    embedder=app.state.embedder, reranker=app.state.reranker),
                                        app.state.store, app.state.lease, app.state.comfy, app.state.events, config, app.state.db)
@@ -142,6 +147,7 @@ def create_app(config: Config | None = None, comfy=None, start_worker: bool = Tr
         async with serve_mcp(app):      # agents' access at /mcp (app/mcp_server.py)
             yield
         try:
+            await app.state.setup.close()
             await app.state.embedder.close()
             await app.state.reranker.close()
             await app.state.planner.close()
@@ -163,7 +169,8 @@ def create_app(config: Config | None = None, comfy=None, start_worker: bool = Tr
     register_batch_routes(app)
     register_delete_routes(app)       # before the wildcard routes: their {name:path} would swallow .../delete-plan
     register_wildcard_routes(app)
-    mount_mcp(app)                    # before the UI, which is mounted at /
+    register_setup_routes(app)
+    mount_mcp(app)                   # before the UI, which is mounted at /
     dist = ROOT / "ui" / "dist"
     if dist.is_dir():
         app.mount("/", UiFiles(directory=dist, html=True), name="ui")
@@ -194,10 +201,6 @@ def register_routes(app: FastAPI):
     async def _job_error(request, exc):
         return _error(400, str(exc))
 
-    @app.exception_handler(content_safety.ContentRulesError)
-    async def _content_rules(request, exc):
-        return _error(503, str(exc))
-
     @app.exception_handler(ImageBusy)
     async def _image_busy(request, exc):
         return _error(409, str(exc))
@@ -225,7 +228,15 @@ def register_routes(app: FastAPI):
             comfy.update(reachable=True, version=stats.get("system", {}).get("comfyui_version"))
         except ComfyError as e:
             comfy["error"] = str(e)
-        return {"app": "ok", "comfy": comfy, "queue": st.worker.state()}
+        return {"app": "ok", "version": __version__, "comfy": comfy, "queue": st.worker.state()}
+
+    @app.get("/api/update-check")
+    async def update_check(request: Request):
+        """Ask GitHub for the latest release (once an hour at most; the answer is kept in memory). Only runs when the user
+        asks: the Settings button, or the UI's check at start when `check_updates_at_start` is on. A problem comes back as
+        {current, error} with status 200, so the UI can show it as text."""
+        st = S(request)
+        return await st.updates.check(st.config.update_repo, __version__)
 
     @app.post("/api/comfy/start")
     async def start_comfy(request: Request):
@@ -325,7 +336,8 @@ def register_routes(app: FastAPI):
 
     def config_view(st) -> dict:
         c = st.config
-        return {"config_file": str(st.config_path), "comfy_url": c.comfy_url, "comfy_install_dir": c.comfy_install_dir,
+        return {"version": __version__, "update_repo": c.update_repo, "project_url": project_url(c.update_repo), "check_updates_at_start": c.check_updates_at_start,
+                "config_file": str(st.config_path), "comfy_url": c.comfy_url, "comfy_install_dir": c.comfy_install_dir,
                 "comfy_cli": c.comfy_cli, "host": c.host, "port": c.port, "data_dir": str(c.data_dir),
                 "images_dir": str(c.images_dir), "workflows_dir": str(c.workflows_dir),
                 "max_images_per_job": c.max_images_per_job, "max_images_per_request": c.max_images_per_request,

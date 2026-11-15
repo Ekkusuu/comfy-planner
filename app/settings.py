@@ -19,9 +19,9 @@ KEYS = {
     "hires_default": ("jobs", "hires_default"),
     "max_loras": ("jobs", "max_loras"), "safety_negative": ("jobs", "safety_negative"),
     "strip_from_default_negative": ("jobs", "strip_from_default_negative"),
-    "allow_draft_cards": ("cards", "allow_draft_cards"),
+    "allow_draft_cards": ("cards", "allow_draft_cards"), "check_updates_at_start": ("app", "check_updates_at_start"),
     "wildcards_enabled": ("wildcards", "enabled"), "wildcards_ideas_per_prompt": ("wildcards", "ideas_per_prompt"),
-    "wildcards_llm_picks_lists": ("wildcards", "llm_picks_lists"), "embeddings_enabled": ("embeddings", "enabled"),
+    "wildcards_llm_picks_lists": ("wildcards", "llm_picks_lists"), "embeddings_enabled": ("embeddings", "enabled"), "embeddings_model": ("embeddings", "model"),
     "wildcards_entries_per_list": ("wildcards", "entries_per_list"), "wildcards_max_idea_entries": ("wildcards", "max_idea_entries"),
     "llm_binary": ("llm", "binary"), "llm_model": ("llm", "model"), "llm_ctx_size": ("llm", "ctx_size"),
     "llm_gpu_layers": ("llm", "gpu_layers"), "llm_enable_thinking": ("llm", "enable_thinking"),
@@ -34,9 +34,9 @@ INT_RANGES = {"max_images_per_job": (1, 100), "max_images_per_request": (1, 2000
               "llm_gpu_layers": (0, 999), "llm_max_tokens": (64, 65536),
               "wildcards_ideas_per_prompt": (0, 10), "wildcards_entries_per_list": (1, 30), "wildcards_max_idea_entries": (0, 1000)}
 FLOAT_RANGES = {"llm_temperature": (0, 2), "llm_start_timeout": (10, 3600), "llm_stop_timeout": (1, 300)}
-BOOLS = {"hires_default", "allow_draft_cards", "llm_enable_thinking", "wildcards_enabled", "wildcards_llm_picks_lists", "embeddings_enabled"}
+BOOLS = {"check_updates_at_start", "hires_default", "allow_draft_cards", "llm_enable_thinking", "wildcards_enabled", "wildcards_llm_picks_lists", "embeddings_enabled"}
 LISTS = {"safety_negative", "strip_from_default_negative", "llm_extra_args"}
-PATHS = {"comfy_cli", "llm_binary"}          # non-empty text
+PATHS = {"comfy_cli", "llm_binary", "embeddings_model"}          # non-empty text
 
 
 class SettingsError(ValueError):
@@ -142,7 +142,7 @@ def write(path: Path, changes: dict):
             continue
         table_name, key = KEYS[name]
         table = _table(doc, table_name)
-        if key in table and _same(table[key], value, name == "llm_binary"):
+        if key in table and _same(table[key], value, name in ("llm_binary", "embeddings_model")):
             continue
         table[key] = value
     text = tomlkit.dumps(doc)

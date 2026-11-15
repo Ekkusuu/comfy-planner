@@ -12,6 +12,15 @@
 # next to the exe, and creates the Desktop shortcut that points at the exe.
 #
 # Stop Comfy Planner first (tray menu > Quit, or:  "Comfy Planner.exe" --quit): a running exe cannot be replaced.
+#
+# -NoShortcut skips the Desktop shortcut (scripts\build_release.ps1 uses it: the installer makes its own shortcuts).
+# -Version 1.2.3 is the number stamped into the exe's file properties and shown in the tray menu. Without it the version in
+# pyproject.toml is used (scripts\build_release.ps1 passes its own, so the exe, the installer and the app agree).
+
+param(
+    [switch]$NoShortcut,
+    [string]$Version
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -22,6 +31,19 @@ $manifestPath = Join-Path $launcherDir 'app.manifest'
 $exePath = Join-Path $root 'Comfy Planner.exe'
 $sourcePaths = @((Join-Path $launcherDir 'Launcher.cs'), (Join-Path $launcherDir 'AppWindow.cs'))
 $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+
+# --- version ---------------------------------------------------------------
+
+if (-not $Version) {
+    $match = [regex]::Match((Get-Content -Raw -LiteralPath (Join-Path $root 'pyproject.toml')), '(?m)^version\s*=\s*"([^"]+)"')
+    if (-not $match.Success) {
+        throw 'no version found in pyproject.toml'
+    }
+    $Version = $match.Groups[1].Value
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "version '$Version' is not in the form 1.2.3"
+}
 
 # The WebView2 SDK. To update: change the version and the hash (the hash is NuGet's .nupkg, sha256).
 $webView2Version = '1.0.4258.31'
@@ -106,10 +128,27 @@ $coreDll = Join-Path $sdkDir 'lib\Microsoft.Web.WebView2.Core.dll'
 # --- compile ---------------------------------------------------------------
 # x64, to match the x64 WebView2Loader.dll.
 
-& $csc /nologo /target:winexe /platform:x64 "/win32icon:$iconPath" "/win32manifest:$manifestPath" `
-    /r:System.Windows.Forms.dll /r:System.Drawing.dll "/r:$coreDll" "/out:$exePath" $sourcePaths
-if ($LASTEXITCODE -ne 0) {
-    throw "csc failed with exit code $LASTEXITCODE"
+# The version goes into the exe as assembly attributes (file properties: File version, Product version). They live in a
+# generated file in the temp folder, so no version number is kept in the C# sources.
+$versionFile = Join-Path ([IO.Path]::GetTempPath()) "comfy-planner-version-$PID.cs"
+$versionSource = @"
+using System.Reflection;
+[assembly: AssemblyTitle("Comfy Planner")]
+[assembly: AssemblyProduct("Comfy Planner")]
+[assembly: AssemblyVersion("$Version.0")]
+[assembly: AssemblyFileVersion("$Version.0")]
+[assembly: AssemblyInformationalVersion("$Version")]
+"@
+[IO.File]::WriteAllText($versionFile, $versionSource, (New-Object Text.UTF8Encoding($false)))
+try {
+    & $csc /nologo /target:winexe /platform:x64 "/win32icon:$iconPath" "/win32manifest:$manifestPath" `
+        /r:System.Windows.Forms.dll /r:System.Drawing.dll "/r:$coreDll" "/out:$exePath" $sourcePaths $versionFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "csc failed with exit code $LASTEXITCODE"
+    }
+}
+finally {
+    Remove-Item -LiteralPath $versionFile -Force -ErrorAction SilentlyContinue
 }
 if (-not (Test-Path $exePath)) {
     throw "the compiler did not produce $exePath"
@@ -126,19 +165,23 @@ foreach ($name in $sdkFiles.Values) {
 
 # --- Desktop shortcut ------------------------------------------------------
 
-$desktop = [Environment]::GetFolderPath('Desktop')
-$lnkPath = Join-Path $desktop 'Comfy Planner.lnk'
-$shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut($lnkPath)
-$shortcut.TargetPath = $exePath
-$shortcut.WorkingDirectory = $root
-$shortcut.IconLocation = "$exePath,0"
-$shortcut.Description = 'Comfy Planner'
-$shortcut.Save()
-[void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut)
-[void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
+$lnkPath = $null
+if (-not $NoShortcut) {
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $lnkPath = Join-Path $desktop 'Comfy Planner.lnk'
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($lnkPath)
+    $shortcut.TargetPath = $exePath
+    $shortcut.WorkingDirectory = $root
+    $shortcut.IconLocation = "$exePath,0"
+    $shortcut.Description = 'Comfy Planner'
+    $shortcut.Save()
+    [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut)
+    [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
+}
 
+Write-Host "Version:  $Version"
 Write-Host "Icon:     $iconPath"
 Write-Host "WebView2: $webView2Version"
 Write-Host "Exe:      $exePath"
-Write-Host "Shortcut: $lnkPath"
+if ($lnkPath) { Write-Host "Shortcut: $lnkPath" }
