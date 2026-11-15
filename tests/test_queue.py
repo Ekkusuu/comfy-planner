@@ -160,6 +160,19 @@ async def test_clear_hides_a_finished_job_and_keeps_its_images(store, worker, ta
     assert store.retry_job(waiting["id"], "all")["cleared_at"] is None    # retrying brings it back to the list
 
 
+async def test_the_job_list_sends_cleared_jobs_slim(store, worker, tagwf):
+    kept, gone = make_job(store, tagwf["id"], queue=True), make_job(store, tagwf["id"], queue=True)
+    store.db.execute("UPDATE jobs SET meta = ? WHERE id IN (?, ?)", ('{"request": "a cat", "scene": {"big": "x"}}', kept["id"], gone["id"]))
+    await run_until_idle(worker)
+    store.clear_job(gone["id"])
+    listed = {j["id"]: j for j in store.list_jobs()}
+    assert listed[kept["id"]]["fields"] == store.get_job(kept["id"])["fields"] and "scene" in listed[kept["id"]]["meta"]    # not cleared: whole
+    slim = listed[gone["id"]]
+    assert slim["fields"] == {} and slim["meta"] == {"request": "a cat"}                      # the Gallery needs only the request
+    assert slim["status"] == "done" and slim["cleared_at"] and slim["image_counts"] == {"done": 1}
+    assert store.get_job(gone["id"])["fields"] and "scene" in store.get_job(gone["id"])["meta"]     # the job itself is untouched
+
+
 async def test_cancel_running_job_interrupts_comfy(store, worker, tagwf, comfy):
     job = make_job(store, tagwf["id"], count=2, queue=True)
     comfy.gate = asyncio.Event()                                            # run() blocks until released
