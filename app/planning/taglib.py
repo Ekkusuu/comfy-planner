@@ -8,6 +8,8 @@ import csv
 import json
 import logging
 import re
+import threading
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -189,16 +191,37 @@ def load_taglib(folder: Path) -> TagLib | None:
 
 
 _loaded: dict[str, tuple[float, TagLib | None]] = {}
+_used: dict[str, float] = {}            # when each library was last asked for (time.monotonic), for unload_idle
+_lock = threading.Lock()                # one read at a time: a second caller waits for the first one's result instead of reading again
 
 
 def get_taglib(folder: Path) -> TagLib | None:
-    """`load_taglib`, kept in memory while the folder's files don't change (a new download is picked up without a restart)."""
+    """`load_taglib`, kept in memory while the folder's files don't change (a new download is picked up without a restart) and
+    until `unload_idle` drops it. Reading takes about a second: planning calls this from a thread first (PlanContext.load_tag_data)."""
     path = folder / "tags.csv"
     try:
         stamp = path.stat().st_mtime
     except OSError:
         return None
-    cached = _loaded.get(str(folder))
-    if cached is None or cached[0] != stamp:
-        cached = _loaded[str(folder)] = (stamp, load_taglib(folder))
-    return cached[1]
+    with _lock:
+        cached = _loaded.get(str(folder))
+        if cached is None or cached[0] != stamp:
+            cached = _loaded[str(folder)] = (stamp, load_taglib(folder))
+        _used[str(folder)] = time.monotonic()
+        return cached[1]
+
+
+def unload_idle(seconds: float) -> bool:
+    """Forget the libraries nobody has asked for during the last `seconds` (they are read again when needed). True if any was dropped.
+    Never waits: while a read is going on it does nothing."""
+    if not _lock.acquire(blocking=False):
+        return False
+    try:
+        now = time.monotonic()
+        idle = [k for k, t in _used.items() if now - t >= seconds]
+        for k in idle:
+            _used.pop(k, None)
+            _loaded.pop(k, None)
+        return bool(idle)
+    finally:
+        _lock.release()

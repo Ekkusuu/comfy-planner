@@ -1,5 +1,7 @@
 """What every planning step needs: config, the LLM client, the library and cards, and ComfyUI's lists."""
+import asyncio
 import json
+import logging
 import random
 from collections import Counter
 from dataclasses import dataclass, field
@@ -13,12 +15,14 @@ from app.library.cards import CardStore
 from app.library.lora_extras import LoraExtras
 from app.library.workflows import WorkflowLibrary
 from app.llm.client import LlmClient, data_block
-from app.planning import contradictions
+from app.planning import contradictions, taglib
 from app.planning.contradictions import Contradictions, get_contradictions
 from app.planning.taglib import TagLib, get_taglib, key
 from app.rerank import Reranker
 from app.wildcards.store import WildcardStore
 
+log = logging.getLogger("planning")
+TAG_DATA_IDLE = 600.0    # seconds without use before the tag library and the contradiction data are dropped from memory
 MAX_LIKED = 5
 LIKED_POOL = 200         # liked prompts considered when choosing the most similar ones
 RECENT_JOBS = 12         # the newest jobs whose prompt tags are not offered again while other good tags exist (variety)
@@ -66,6 +70,11 @@ class PlanContext:
         if self.contradiction_data is not None:
             return self.contradiction_data
         return get_contradictions(self.config.data_dir / contradictions.DATA_FOLDER) if contradictions.CONTRADICTIONS_ENABLED else None
+
+    async def load_tag_data(self):
+        """Read the tag library and the contradiction data in worker threads (the library alone takes about a second), so planning
+        never stalls the event loop on them: `taglib()` and `contradictions()` then find them in memory. Cheap when they already are."""
+        await asyncio.gather(asyncio.to_thread(self.taglib), asyncio.to_thread(self.contradictions))
 
     def idea_seed(self) -> int:
         """A fresh seed for one call's wildcard draw: every plan and every re-plan gets different ingredients."""
@@ -154,6 +163,18 @@ class PlanContext:
             if close:
                 return close
         return pool[:MAX_LIKED]
+
+
+async def unload_idle_tag_data(every: float = 60.0, idle: float = TAG_DATA_IDLE):
+    """Runs for the life of the app: every `every` seconds drops the tag library and the contradiction data that nothing has used for
+    `idle` seconds (about 45 MB for the real library). The next plan reads them again, in a thread."""
+    while True:
+        await asyncio.sleep(every)
+        try:
+            if taglib.unload_idle(idle) | contradictions.unload_idle(idle):
+                log.info("tag data unloaded after %.0f minutes without use", idle / 60)
+        except Exception:
+            log.exception("could not unload the tag data")
 
 
 def block(label: str, value) -> str:

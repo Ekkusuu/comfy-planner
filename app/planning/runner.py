@@ -46,6 +46,7 @@ class PlanRunner:
         self._line: deque[tuple[int, object]] = deque()     # (plan id, run) in the order submitted; the first one is being worked on
         self._drain_task: asyncio.Task | None = None        # the task that works through the line
         self._cancelled: set[int] = set()       # plans the user cancelled: they stop before their next job
+        self._preparing: set[asyncio.Task] = set()     # the start-up work begun when a plan is created (see _prepare)
 
     # ---------- requests ----------
 
@@ -165,15 +166,26 @@ class PlanRunner:
                 self.store.mark_planning(job_id, plan_id)
                 self._job_event(self.store.get_job(job_id, images=False))
         self._line.append((plan_id, run))
+        self._prepare()
         if self._drain_task is None or self._drain_task.done():
             self._drain_task = asyncio.create_task(self._drain())
         self.events.publish({"type": "plan", "plan": self.get(plan_id)})
         return self.get(plan_id)
 
+    def _prepare(self):
+        """Get the slow, CPU-only start-up work going while the plan waits for the GPU and the LLM loads: the embedding server starts, and
+        the tag library and contradiction data are read in threads. Planning then finds them ready. Only the order of work changes."""
+        if self.ctx.embedder is not None:
+            self.ctx.embedder.start_early()
+        task = asyncio.ensure_future(self.ctx.load_tag_data())
+        self._preparing.add(task)
+        task.add_done_callback(self._preparing.discard)
+
     async def close(self):
-        if self._drain_task is not None:
-            self._drain_task.cancel()
-            await asyncio.gather(self._drain_task, return_exceptions=True)
+        tasks = [*self._preparing, *([self._drain_task] if self._drain_task is not None else [])]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # ---------- the line ----------
 
@@ -239,6 +251,7 @@ class PlanRunner:
                 except ComfyError:
                     self.ctx.oi = None      # ComfyUI is down: sampler / LoRA lists come from the cards only
                 self._set(plan_id, "planning", "Reading the request")
+                await self.ctx.load_tag_data()      # normally done long before (_prepare); this waits for it, or reads again after an idle unload
                 await run(plan)
             if plan_id in self._cancelled:
                 self._fail_open_jobs(plan_id, "Planning was cancelled before this job.")

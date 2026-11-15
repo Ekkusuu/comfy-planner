@@ -27,6 +27,8 @@ import json
 import logging
 import math
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, NamedTuple
@@ -367,17 +369,38 @@ def load_contradictions(path: Path) -> Contradictions | None:
 
 
 _loaded: dict[str, tuple[float, Contradictions | None]] = {}
+_used: dict[str, float] = {}            # when each was last asked for (time.monotonic), for unload_idle
+_lock = threading.Lock()                # one read at a time: a second caller waits for the first one's result instead of reading again
 
 
 def get_contradictions(folder: Path) -> Contradictions | None:
     """`load_contradictions` for `folder/DERIVED_FILE`, kept in memory while the file does not change (a rebuild is picked up
-    without a restart). Loaded on first use only. None without the file."""
+    without a restart) and until `unload_idle` drops it. Loaded on first use only (planning does that in a thread first:
+    PlanContext.load_tag_data). None without the file."""
     path = folder / DERIVED_FILE
     try:
         stamp = path.stat().st_mtime
     except OSError:
         return None
-    cached = _loaded.get(str(path))
-    if cached is None or cached[0] != stamp:
-        cached = _loaded[str(path)] = (stamp, load_contradictions(path))
-    return cached[1]
+    with _lock:
+        cached = _loaded.get(str(path))
+        if cached is None or cached[0] != stamp:
+            cached = _loaded[str(path)] = (stamp, load_contradictions(path))
+        _used[str(path)] = time.monotonic()
+        return cached[1]
+
+
+def unload_idle(seconds: float) -> bool:
+    """Forget the data nobody has asked for during the last `seconds` (it is read again when needed). True if any was dropped.
+    Never waits: while a read is going on it does nothing."""
+    if not _lock.acquire(blocking=False):
+        return False
+    try:
+        now = time.monotonic()
+        idle = [k for k, t in _used.items() if now - t >= seconds]
+        for k in idle:
+            _used.pop(k, None)
+            _loaded.pop(k, None)
+        return bool(idle)
+    finally:
+        _lock.release()
