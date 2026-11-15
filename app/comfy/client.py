@@ -3,9 +3,11 @@ import asyncio
 import json
 import logging
 import struct
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 import websockets
@@ -20,6 +22,11 @@ PREVIEW_IMAGE_WITH_METADATA = 4  # payload: 4-byte JSON length, the JSON (with p
 # picture; a model without its decoder file falls back to ComfyUI's cheap latent-to-RGB colours. Previews never change
 # the saved image. The server's own --preview-method default is "none".
 PREVIEW_METHOD = "taesd"
+# The reachability check (/system_stats) keeps its answer this long, and gives up connecting after a short time: on Windows a
+# refused connection to a closed port takes about 2 seconds to report, and the UI, the queue and the setup page all ask often.
+STATS_CACHE_SECONDS = 3.0
+LOCAL_CONNECT_SECONDS = 0.5      # connecting to this machine is instant when ComfyUI is running
+REMOTE_CONNECT_SECONDS = 3.0
 
 
 class ComfyError(Exception):
@@ -47,6 +54,7 @@ class ComfyClient:
         self.client_id = client_id or uuid.uuid4().hex
         self._http = httpx.AsyncClient(base_url=self.base_url, timeout=30)
         self._object_info: dict | None = None
+        self._stats: tuple[float, bool, object] | None = None   # (when, answered, stats or the failure text) of the last check
 
     async def set_url(self, base_url: str):
         """Point at another ComfyUI address (a changed setting); what was cached from the old one is dropped."""
@@ -54,6 +62,7 @@ class ComfyClient:
         self.base_url = base_url.rstrip("/")
         self._http = httpx.AsyncClient(base_url=self.base_url, timeout=30)
         self._object_info = None
+        self._stats = None
         await old.aclose()
 
     async def close(self):
@@ -74,12 +83,27 @@ class ComfyClient:
 
     # ---------- info ----------
 
-    async def system_stats(self) -> dict:
-        return await self._json("GET", "/system_stats")
-
-    async def is_up(self) -> bool:
+    async def system_stats(self, fresh: bool = False) -> dict:
+        """ComfyUI's /system_stats. The answer, or the 'not reachable' failure, is kept for STATS_CACHE_SECONDS unless `fresh`."""
+        now = time.monotonic()
+        if not fresh and self._stats and now - self._stats[0] < STATS_CACHE_SECONDS:
+            _, answered, value = self._stats
+            if answered:
+                return value
+            raise ComfyUnreachable(value)
+        host = urlsplit(self.base_url).hostname or ""
+        connect = LOCAL_CONNECT_SECONDS if host in ("127.0.0.1", "localhost", "::1") else REMOTE_CONNECT_SECONDS
         try:
-            await self.system_stats()
+            stats = await self._json("GET", "/system_stats", timeout=httpx.Timeout(10, connect=connect))
+        except ComfyUnreachable as e:
+            self._stats = (time.monotonic(), False, str(e))
+            raise
+        self._stats = (time.monotonic(), True, stats)
+        return stats
+
+    async def is_up(self, fresh: bool = False) -> bool:
+        try:
+            await self.system_stats(fresh)
             return True
         except ComfyError:
             return False
@@ -152,7 +176,7 @@ class ComfyClient:
                 emit({"type": "queued", "prompt_id": prompt_id})
                 await self._follow(ws, prompt_id, emit, on_preview)
         except (OSError, websockets.WebSocketException) as e:
-            if isinstance(e, ConnectionRefusedError) or not await self.is_up():
+            if isinstance(e, ConnectionRefusedError) or not await self.is_up(fresh=True):
                 raise ComfyUnreachable(f"ComfyUI isn't reachable at {self.base_url}") from e
             if prompt_id is None:
                 raise ComfyError(f"Could not open the progress websocket: {e}") from e
