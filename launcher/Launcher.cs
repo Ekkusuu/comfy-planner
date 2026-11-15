@@ -127,6 +127,8 @@ namespace ComfyPlanner
         private readonly object _serverLock = new object();
 
         private StreamWriter _backendLog;
+        private long _backendLogBytes;         // size of app.log so far, to start a new file at LogCapBytes
+        private const long LogCapBytes = 5L * 1024 * 1024;   // app.log is renamed to app.log.1 (and .1 to .2, .2 to .3) at this size
         private Process _backend;              // non-null only if THIS launcher started the server
         private AppWindow _window;             // the app window; hidden (not closed) when the user clicks X
         private bool _windowUnavailable;       // WebView2 could not start: use the default browser instead
@@ -488,7 +490,8 @@ namespace ComfyPlanner
             // uv only sets the environment up. The server is then started with the environment's own python, so
             // no uv process stays alive (and holds memory) for as long as the server runs.
             string python = Path.Combine(_root, ".venv\\Scripts\\python.exe");
-            string serverArgs = "-m uvicorn app.main:app --host 127.0.0.1 --port 8765";
+            // --no-access-log: the browser polls the server every few seconds, and one log line per request filled app.log
+            string serverArgs = "-m uvicorn app.main:app --host 127.0.0.1 --port 8765 --no-access-log";
 
             // First start: the .venv is created and the packages are installed by the first "uv sync" below.
             _firstStart = !Directory.Exists(Path.Combine(_root, ".venv"));
@@ -501,10 +504,7 @@ namespace ComfyPlanner
             try
             {
                 Directory.CreateDirectory(_logsDir);
-                _backendLog = new StreamWriter(
-                    new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
-                    new UTF8Encoding(false));
-                _backendLog.AutoFlush = true;
+                OpenBackendLog();
 
                 // Step 1: bring the Python environment up to date, and wait for it. On the very first start this
                 // downloads and installs the packages, so it gets the longer limit.
@@ -598,6 +598,40 @@ namespace ComfyPlanner
             return process;
         }
 
+        // Open app.log for appending. A file that has reached LogCapBytes is first kept as app.log.1 (older copies move up,
+        // the oldest, app.log.3, is deleted), so the log never grows without limit. Call it with _logLock held, or before
+        // the server's output handlers exist.
+        private void OpenBackendLog()
+        {
+            FileInfo existing = new FileInfo(_logPath);
+            _backendLogBytes = existing.Exists ? existing.Length : 0;
+            if (_backendLogBytes >= LogCapBytes)
+            {
+                try
+                {
+                    for (int n = 3; n >= 1; n--)
+                    {
+                        string from = n == 1 ? _logPath : _logPath + "." + (n - 1);
+                        string to = _logPath + "." + n;
+                        if (File.Exists(from))
+                        {
+                            File.Delete(to);
+                            File.Move(from, to);
+                        }
+                    }
+                    _backendLogBytes = 0;
+                }
+                catch (Exception)
+                {
+                    // Another program holds a copy open: go on appending to the big file rather than lose output.
+                }
+            }
+            _backendLog = new StreamWriter(
+                new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
+                new UTF8Encoding(false));
+            _backendLog.AutoFlush = true;
+        }
+
         private void OnBackendOutput(object sender, DataReceivedEventArgs e)
         {
             if (e.Data == null)
@@ -611,6 +645,12 @@ namespace ComfyPlanner
                     if (_backendLog != null)
                     {
                         _backendLog.WriteLine(e.Data);
+                        _backendLogBytes += e.Data.Length + 2;
+                        if (_backendLogBytes >= LogCapBytes)
+                        {
+                            _backendLog.Dispose();
+                            OpenBackendLog();      // the file is at its limit: rotate and go on in a new one
+                        }
                     }
                 }
                 catch (Exception)
