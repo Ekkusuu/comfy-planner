@@ -22,6 +22,11 @@ class LlmServerError(Exception):
 # the slot's own context, so both caches only cost memory: measured on a 12B model, 17.7 GB of RAM fell to 8.9 GB with them
 # off, at the same speed.
 MEMORY_FLAGS = (("--cache-ram", "0"), ("--ctx-checkpoints", "0"))
+# Speed flag, added the same way. N-gram speculative decoding needs no second model: it proposes the next tokens by looking for
+# the text just written earlier in the prompt (the wildcard entries and tags the writer copies into its answer) and the model
+# checks them in one step. Measured on a 12B model with a real write_prompts request: 10.3-12.8 s -> 7.2-8.2 s, with the same
+# kind of replies. (Flash attention is already on: this build's --flash-attn defaults to auto, and forcing it on measured the same.)
+SPEED_FLAGS = (("--spec-type", "ngram-simple"),)
 
 _help_text: dict[tuple[str, float], str] = {}       # llama-server --help output by (binary, modified time)
 
@@ -49,13 +54,23 @@ async def help_text(binary) -> str:
     return _help_text[key]
 
 
-def memory_flags(help_output: str, extra_args: list[str]) -> list[str]:
-    """MEMORY_FLAGS that this build lists in its help, minus any the user already sets in the extra arguments."""
+def _listed_flags(wanted, help_output: str, extra_args: list[str]) -> list[str]:
+    """The (flag, value) pairs that this build lists in its help, minus any the user already sets in the extra arguments."""
     flags = []
-    for name, value in MEMORY_FLAGS:
-        if re.search(rf"(^|[\s,]){re.escape(name)}([\s,=]|$)", help_output, re.M) and name not in extra_args:
+    for name, value in wanted:
+        if re.search(rf"(^|[\s,]){re.escape(name)}([\s,=]|$)", help_output, re.M) and not any(a == name or a.startswith(f"{name}=") for a in extra_args):
             flags += [name, value]
     return flags
+
+
+def memory_flags(help_output: str, extra_args: list[str]) -> list[str]:
+    """MEMORY_FLAGS that this build lists in its help, minus any the user already sets in the extra arguments."""
+    return _listed_flags(MEMORY_FLAGS, help_output, extra_args)
+
+
+def speed_flags(help_output: str, extra_args: list[str]) -> list[str]:
+    """SPEED_FLAGS that this build lists in its help, minus any the user already sets in the extra arguments."""
+    return _listed_flags(SPEED_FLAGS, help_output, extra_args)
 
 
 class LlamaServer:
@@ -63,6 +78,7 @@ class LlamaServer:
         self.config = config
         self.proc: asyncio.subprocess.Process | None = None
         self.memory_flags: list[str] = []          # set by start() from the binary's --help
+        self.speed_flags: list[str] = []
 
     @property
     def url(self) -> str:
@@ -77,7 +93,7 @@ class LlamaServer:
         return [str(c.llm_binary), "--model", str(c.llm_model_path), "--host", c.llm_host, "--port", str(c.llm_port),
                 "--ctx-size", str(c.llm_ctx_size), "--n-gpu-layers", str(c.llm_gpu_layers), "--jinja",
                 # one slot: the app makes one call at a time, and extra slots cost about 1 GB of VRAM
-                "--parallel", "1", *self.memory_flags, *c.llm_extra_args]
+                "--parallel", "1", *self.memory_flags, *self.speed_flags, *c.llm_extra_args]
 
     # ---------- start ----------
 
@@ -96,8 +112,11 @@ class LlamaServer:
             raise LlmServerError(f"LLM model file not found: {model}")
         if await self._answers():
             raise LlmServerError(f"Something is already answering on {self.url} (a leftover llama-server?). Stop it first.")
-        self.memory_flags = memory_flags(await help_text(c.llm_binary), c.llm_extra_args)
-        log.info("starting llama-server with %s%s", model.name, f" ({' '.join(self.memory_flags)})" if self.memory_flags else "")
+        help_output = await help_text(c.llm_binary)
+        self.memory_flags = memory_flags(help_output, c.llm_extra_args)
+        self.speed_flags = speed_flags(help_output, c.llm_extra_args)
+        added = [*self.memory_flags, *self.speed_flags]
+        log.info("starting llama-server with %s%s", model.name, f" ({' '.join(added)})" if added else "")
         kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
         self.proc = await asyncio.create_subprocess_exec(*self.command(), stdin=asyncio.subprocess.DEVNULL,
                                                          stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, **kwargs)

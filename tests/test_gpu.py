@@ -89,6 +89,15 @@ def test_memory_flags_only_when_the_build_knows_them_and_the_user_has_not_set_th
     assert memory_flags("--cache-ram-extra N\n", []) == []                                      # only the exact flag name
 
 
+def test_speed_flags_only_when_the_build_knows_them_and_the_user_has_not_set_them():
+    from app.llm.server import speed_flags
+    build = "--spec-type none,ngram-simple,ngram-mod   types of speculative decoding\n"
+    assert speed_flags(build, []) == ["--spec-type", "ngram-simple"]
+    assert speed_flags(build, ["--spec-type", "ngram-mod"]) == []          # the user's own choice wins
+    assert speed_flags(build, ["--spec-type=ngram-mod"]) == []
+    assert speed_flags("--ctx-size N\n", []) == [] and speed_flags("", []) == []
+
+
 async def test_the_start_command_carries_the_memory_flags_the_binary_supports(llm_config, monkeypatch):
     import app.llm.server as srv
     async def fake_help(binary):
