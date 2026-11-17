@@ -41,6 +41,8 @@ temperature = 0.2
 max_tokens = 3000
 start_timeout = 180            # seconds to wait for the model to load
 stop_timeout = 15              # seconds to wait after asking it to stop, then it is killed
+keep_loaded_seconds = 120      # seconds the model stays loaded after planning, so the next plan starts at once; 0 = stop it right away.
+                               # It is always stopped first when an image is waiting to be generated.
 extra_args = []                # anything else to pass to llama-server
 
 [llm.models]

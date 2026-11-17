@@ -340,7 +340,7 @@ class CardBuilder:
         if file is None or file.path is None:
             raise CardError(f"{name} isn't in the LoRA folders any more. Rescan the LoRAs.")
         meta = self.scanner.metadata(file)
-        lib = get_taglib(self.config.data_dir / "taglib")
+        lib = await asyncio.to_thread(get_taglib, self.config.data_dir / "taglib")      # in a thread: the first read takes about a second
         meta = {**meta, "style_tags": real_style_tags(meta["style_tags"], lib)}        # candidates and the card see only real selectors
         result = await self.civitai.by_hash(file.sha256)
         civ = civitai.summarize(result.data) if result.status == "ok" else None

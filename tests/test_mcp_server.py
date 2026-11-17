@@ -37,8 +37,8 @@ def mcp_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CIVITAI_API_TOKEN", "")
     port = free_port()
     toml = tmp_path / "app.toml"
-    toml.write_text("[embeddings]\nenabled = false\n[jobs]\nsafety_negative = []\n", encoding="utf-8")
-    config = Config(data_dir=tmp_path / "data", safety_negative=[], embeddings_enabled=False, port=port)
+    toml.write_text("[embeddings]\nenabled = false\n[jobs]\nsafety_negative = []\n[llm]\nkeep_loaded_seconds = 0\n", encoding="utf-8")
+    config = Config(data_dir=tmp_path / "data", safety_negative=[], embeddings_enabled=False, port=port, llm_keep_loaded_seconds=0)
     oi = json.loads((FIXTURES / "object_info.json").read_text(encoding="utf-8"))
     comfy = FakeComfy(oi)
     rec = Recorder()

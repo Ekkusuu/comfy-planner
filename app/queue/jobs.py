@@ -54,6 +54,7 @@ class JobStore:
     def __init__(self, db: Database, config: Config, library: WorkflowLibrary, wildcards: WildcardStore | None = None,
                  cards: CardStore | None = None):
         self.db, self.config, self.library, self.wildcards, self.cards = db, config, library, wildcards, cards
+        self._job_columns: list[str] | None = None      # the jobs table's columns, read once for list_jobs
 
     # ---------- create ----------
 
@@ -186,8 +187,15 @@ class JobStore:
         return job
 
     def list_jobs(self, status: str | None = None) -> list[dict]:
-        """Jobs with per-image status counts (no recipes)."""
-        sql = ("SELECT j.*, p.request AS batch_request FROM jobs j LEFT JOIN plans p ON p.id = j.batch_id"
+        """Jobs with per-image status counts (no recipes). A job the user cleared from the Queue page comes back slim: `fields` is empty and
+        `meta` holds only the request (the Gallery shows it), so the list stays small however many finished jobs there are. get_job has
+        everything."""
+        if self._job_columns is None:
+            self._job_columns = [r["name"] for r in self.db.conn.execute("PRAGMA table_info(jobs)")]
+        slim = {"fields": "'{}'", "meta": "json_object('request', json_extract(j.meta, '$.request'))"}
+        columns = ", ".join(f"CASE WHEN j.cleared_at IS NULL THEN j.{c} ELSE {slim[c]} END AS {c}" if c in slim else f"j.{c}"
+                            for c in self._job_columns)
+        sql = (f"SELECT {columns}, p.request AS batch_request FROM jobs j LEFT JOIN plans p ON p.id = j.batch_id"
                + (" WHERE j.status = ?" if status else "") + " ORDER BY j.position, j.id")
         jobs = self.db.rows(sql, (status,) if status else ())
         counts: dict[int, dict] = {}
@@ -493,6 +501,10 @@ class JobStore:
     def next_queued(self) -> dict | None:
         row = self.db.row("SELECT id FROM jobs WHERE status = 'queued' ORDER BY position, id LIMIT 1")
         return self.get_job(row["id"]) if row else None
+
+    def has_runnable(self) -> bool:
+        """True when a job is queued or running (so an image may start at any moment)."""
+        return self.db.row("SELECT 1 AS x FROM jobs WHERE status IN ('queued', 'running') LIMIT 1") is not None
 
     def start_job(self, job_id: int):
         self.db.execute("UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, ?) WHERE id = ? AND status = 'queued'",

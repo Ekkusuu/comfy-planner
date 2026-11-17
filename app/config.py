@@ -95,6 +95,7 @@ class Config:
     llm_max_tokens: int = 3000
     llm_start_timeout: float = 180.0
     llm_stop_timeout: float = 15.0
+    llm_keep_loaded_seconds: float = 120.0         # how long the LLM stays loaded after planning, in case another plan follows (0 = stop at once)
     llm_extra_args: list[str] = field(default_factory=list)
     allow_draft_cards: bool = False                # the planner may use cards you haven't approved
     # search by meaning (see [embeddings] in app.toml). A small model on the CPU, never on the GPU.
@@ -210,6 +211,7 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     cfg.llm_max_tokens = llm.get("max_tokens", cfg.llm_max_tokens)
     cfg.llm_start_timeout = llm.get("start_timeout", cfg.llm_start_timeout)
     cfg.llm_stop_timeout = llm.get("stop_timeout", cfg.llm_stop_timeout)
+    cfg.llm_keep_loaded_seconds = llm.get("keep_loaded_seconds", cfg.llm_keep_loaded_seconds)
     cfg.llm_extra_args = list(llm.get("extra_args", []))
     cfg.allow_draft_cards = cards.get("allow_draft_cards", cfg.allow_draft_cards)
     emb = raw.get("embeddings", {})

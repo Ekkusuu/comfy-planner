@@ -10,12 +10,16 @@ from app.planning.runner import PlanRunner
 from tests.test_gpu import FakeFreeComfy, FakeServer, FakeWorker, Recorder
 
 
+async def no_tag_data():
+    """Stands in for PlanContext.load_tag_data: these tests plan nothing."""
+
+
 @pytest.fixture
 async def line_runner(config, db, store, comfy):
     """A PlanRunner with stubbed GPU (FakeWorker / FakeServer) and a trivial context: runs are plain callbacks."""
     rec = Recorder()
     lease = GpuLease(FakeWorker(rec), FakeFreeComfy(rec), FakeServer(rec))
-    ctx = SimpleNamespace(oi=None)
+    ctx = SimpleNamespace(oi=None, embedder=None, load_tag_data=no_tag_data)
     runner = PlanRunner(ctx, store, lease, comfy, EventBus(), config, db)
     yield runner, lease, rec
     await runner.close()
@@ -172,7 +176,7 @@ async def test_no_worker_left_held_at_end(config, db, store, comfy, worker):
     """With the real queue worker: after the line drains it is not held and the lease is free."""
     rec = Recorder()
     lease = GpuLease(worker, comfy, FakeServer(rec))
-    ctx = SimpleNamespace(oi=None)
+    ctx = SimpleNamespace(oi=None, embedder=None, load_tag_data=no_tag_data)
     runner = PlanRunner(ctx, store, lease, comfy, EventBus(), config, db)
     try:
         order = []

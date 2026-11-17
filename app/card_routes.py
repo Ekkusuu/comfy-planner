@@ -44,10 +44,10 @@ def register_card_routes(app):
             out["file"] = next((f for f in await lora_entries(st) if f["key"] == key), None)
         return out
 
-    async def lora_entries(st) -> list[dict]:
+    async def lora_entries(st, refresh: bool = False) -> list[dict]:
         """Every LoRA file and every LoRA card, with how they relate: new (no card yet), ok, changed (the file's
         hash differs from the one the card was built from), missing (ComfyUI lists it, no file found) or removed."""
-        files = {f.name: f for f in await st.scanner.scan()}
+        files = {f.name: f for f in await st.scanner.scan(refresh)}
         cards = {c["key"]: c for c in st.cards.of_kind("lora")}
         extras, used = st.extras.all(), st.extras.used_counts()
         entries = []
@@ -104,7 +104,7 @@ def register_card_routes(app):
         """Look at the LoRA folders again: new, changed and removed files show up in each entry's `state`. LoRAs whose Civitai
         preview failed before are asked about again."""
         S(request).covers.forget_misses()
-        return await lora_entries(S(request))
+        return await lora_entries(S(request), refresh=True)
 
     # ---------- the user's tags and covers ----------
 

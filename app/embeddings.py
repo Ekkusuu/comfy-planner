@@ -153,6 +153,14 @@ class VectorCache:
                 found[key] = vec
         return found
 
+    def have(self, keys: list[str]) -> set[str]:
+        """Which of these keys are stored. Reads no vectors."""
+        found: set[str] = set()
+        for i in range(0, len(keys), 500):
+            chunk = keys[i:i + 500]
+            found.update(key for (key,) in self.db.execute(f"SELECT key FROM vectors WHERE key IN ({','.join('?' * len(chunk))})", chunk))
+        return found
+
     def put_many(self, items: dict[str, array]):
         with self.db:
             self.db.executemany("INSERT OR REPLACE INTO vectors (key, data) VALUES (?, ?)", [(k, v.tobytes()) for k, v in items.items()])
@@ -173,11 +181,12 @@ class Embedder:
         self.transport = transport
         self._http: httpx.AsyncClient | None = None
         self._cache: VectorCache | None = None
-        self._mem: dict[str, array] = {}              # vectors read or computed in this run
+        self._mem: dict[str, array] = {}              # vectors read or computed since the embedding server last started (emptied when it stops)
         self._queries: dict[str, array] = {}
         self._lock = asyncio.Lock()                   # one batch at a time (the server has one slot)
         self._down_until = 0.0
         self._idle: asyncio.TimerHandle | None = None
+        self._starting: asyncio.Task | None = None    # the start_early task while it runs
         self._warming: set[asyncio.Task] = set()
         self._stopping: set[asyncio.Task] = set()
 
@@ -209,6 +218,18 @@ class Embedder:
             except sqlite3.Error as e:
                 log.warning("embedding cache unreadable: %s", e)
         return [self._mem.get(k) for k in keys]
+
+    def missing(self, texts: list[str]) -> list[str]:
+        """The (document) texts that have no stored vector yet. Unlike `cached` this reads no vectors, only which keys exist, so
+        checking thousands of texts at start-up doesn't fill the memory with their vectors."""
+        keys = {t: self._key(t) for t in texts}
+        unknown = [k for k in dict.fromkeys(keys.values()) if k not in self._mem]
+        try:
+            stored = self._disk().have(unknown) if unknown else set()
+        except sqlite3.Error as e:
+            log.warning("embedding cache unreadable: %s", e)
+            stored = set()
+        return [t for t in dict.fromkeys(texts) if keys[t] not in self._mem and keys[t] not in stored]
 
     # ---------- computing ----------
 
@@ -261,6 +282,23 @@ class Embedder:
             self._touch()
             return out
 
+    def start_early(self):
+        """Start the embedding server in the background, so it is up when planning needs it (loading the model takes a few seconds, and
+        planning calls this while it waits for the GPU). Nothing happens when it is off, running, or failed lately. Safe to call again."""
+        if not self.enabled or getattr(self.server, "running", False) or self._starting or not self.config.embeddings_model.is_file():
+            return
+        task = asyncio.get_running_loop().create_task(self._start_early())
+        self._starting = task
+        task.add_done_callback(lambda _: setattr(self, "_starting", None))
+
+    async def _start_early(self):
+        try:
+            async with self._lock:
+                await self.server.start()
+                self._touch()          # unused, it stops again after idle_stop like any other start
+        except (EmbeddingError, OSError) as e:
+            self._fail(e)
+
     def warm(self, texts: list[str]):
         """Compute these document texts in the background (so a later `cached` finds them). Safe to call again."""
         if not self.enabled or not texts:
@@ -271,10 +309,13 @@ class Embedder:
 
     async def _warm(self, texts: list[str]):
         started = time.monotonic()
-        todo = [t for t, v in zip(texts, self.cached(texts)) if v is None]
+        todo = self.missing(texts)
         for i in range(0, len(todo), 256):        # in pieces, so a stop or a failure loses little
-            if await self.embed(todo[i:i + 256]) is None:
+            piece = todo[i:i + 256]
+            if await self.embed(piece) is None:
                 return
+            for t in piece:                       # stored on disk now; planning reads back what it needs, so don't hold them all
+                self._mem.pop(self._key(t), None)
         if todo:
             log.info("embedded %d texts in %.0fs", len(todo), time.monotonic() - started)
 
@@ -305,11 +346,12 @@ class Embedder:
     async def _stop_server(self):
         async with self._lock:
             await self.server.stop()
+            self._mem.clear()          # the vectors stay on disk; the next search reads back the ones it needs
 
     async def close(self):
         if self._idle is not None:
             self._idle.cancel()
-        tasks = [*self._warming, *self._stopping]
+        tasks = [*self._warming, *self._stopping, *([self._starting] if self._starting else [])]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
